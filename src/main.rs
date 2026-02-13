@@ -69,6 +69,12 @@ enum Commands {
         #[arg(long)]
         uninstall: bool,
     },
+
+    /// Cycle through accounts when limits exhausted
+    Cycle {
+        #[command(subcommand)]
+        command: CycleCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -99,6 +105,68 @@ enum AccountCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum CycleCommands {
+    /// Show current cycle status
+    Status,
+
+    /// Configure cycle thresholds
+    Config {
+        /// 5h threshold (remaining % that triggers switch)
+        #[arg(long)]
+        five_hour: Option<f64>,
+
+        /// Weekly threshold (remaining % that triggers switch)
+        #[arg(long)]
+        weekly: Option<f64>,
+
+        /// Mode: and (both) or or (either)
+        #[arg(long)]
+        mode: Option<String>,
+    },
+
+    /// Enable cycling
+    Enable,
+
+    /// Disable cycling
+    Disable,
+
+    /// Manually trigger cycle check
+    Now {
+        /// Force switch even if Codex is running
+        #[arg(short, long)]
+        force: bool,
+    },
+
+    /// Show cycle history
+    History,
+
+    /// Reorder accounts in cycle
+    Reorder {
+        /// Accounts in new order
+        accounts: Vec<String>,
+    },
+
+    /// Manage schedule
+    Schedule {
+        #[command(subcommand)]
+        command: ScheduleCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum ScheduleCommands {
+    /// Enable scheduled cycling
+    Enable {
+        /// Check interval in minutes
+        #[arg(long, default_value = "60")]
+        interval: u32,
+    },
+
+    /// Disable scheduled cycling
+    Disable,
+}
+
 #[derive(Debug, Serialize, Deserialize, Default)]
 struct Config {
     active_account: Option<String>,
@@ -109,6 +177,30 @@ struct Config {
 struct AccountInfo {
     added_at: String,
     last_used: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct CycleConfig {
+    enabled: bool,
+    thresholds: CycleThresholds,
+    mode: String,
+    accounts: Vec<String>,
+    current_index: usize,
+    last_cycle: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct CycleThresholds {
+    five_hour: f64,
+    weekly: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CycleHistoryEntry {
+    timestamp: String,
+    from_account: String,
+    to_account: String,
+    reason: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -184,6 +276,14 @@ fn get_cache_path(config_dir: &Path) -> PathBuf {
     config_dir.join("usage_cache.json")
 }
 
+fn get_cycle_config_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("cycle.json")
+}
+
+fn get_cycle_history_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("cycle_history.jsonl")
+}
+
 fn load_config(config_dir: &Path) -> Result<Config> {
     let config_path = get_config_path(config_dir);
     if config_path.exists() {
@@ -199,6 +299,26 @@ fn save_config(config_dir: &Path, config: &Config) -> Result<()> {
     let config_path = get_config_path(config_dir);
     let content = serde_json::to_string_pretty(config).context("Failed to serialize config")?;
     fs::write(&config_path, content).context("Failed to write config")?;
+    Ok(())
+}
+
+fn load_cycle_config(config_dir: &Path) -> Result<CycleConfig> {
+    let path = get_cycle_config_path(config_dir);
+    if path.exists() {
+        let content = fs::read_to_string(&path)?;
+        let config: CycleConfig =
+            serde_json::from_str(&content).context("Failed to parse cycle config")?;
+        Ok(config)
+    } else {
+        Ok(CycleConfig::default())
+    }
+}
+
+fn save_cycle_config(config_dir: &Path, config: &CycleConfig) -> Result<()> {
+    let path = get_cycle_config_path(config_dir);
+    let content =
+        serde_json::to_string_pretty(config).context("Failed to serialize cycle config")?;
+    fs::write(&path, content).context("Failed to write cycle config")?;
     Ok(())
 }
 
@@ -821,6 +941,325 @@ fn print_oneline(usage: &UsageData) {
     }
 }
 
+fn cmd_cycle_status(config_dir: &Path) -> Result<()> {
+    let cycle_config = load_cycle_config(config_dir)?;
+    let config = load_config(config_dir)?;
+
+    println!("{}", "=".repeat(50));
+    println!("  Cycle Status");
+    println!("{}", "=".repeat(50));
+
+    if cycle_config.enabled {
+        println!("  ✅ Cycling enabled");
+    } else {
+        println!("  ❌ Cycling disabled");
+    }
+
+    println!();
+    println!("  Thresholds:");
+    println!(
+        "    5h:    <= {:.0}% remaining",
+        cycle_config.thresholds.five_hour
+    );
+    println!(
+        "    Weekly: <= {:.0}% remaining",
+        cycle_config.thresholds.weekly
+    );
+    println!("    Mode:   {}", cycle_config.mode);
+
+    println!();
+    println!("  Accounts in cycle:");
+    if cycle_config.accounts.is_empty() {
+        println!("    (none - will use all configured accounts)");
+        for name in config.accounts.keys() {
+            let marker = if Some(name.as_str()) == config.active_account.as_deref() {
+                " (current)"
+            } else {
+                ""
+            };
+            println!("    {}{}", name, marker);
+        }
+    } else {
+        for (i, name) in cycle_config.accounts.iter().enumerate() {
+            let marker = if i == cycle_config.current_index {
+                " (next)"
+            } else if Some(name.as_str()) == config.active_account.as_deref() {
+                " (current)"
+            } else {
+                ""
+            };
+            println!("    {}. {}{}", i + 1, name, marker);
+        }
+    }
+
+    if let Some(last_cycle) = &cycle_config.last_cycle {
+        println!();
+        println!("  Last cycle: {}", last_cycle);
+    }
+
+    Ok(())
+}
+
+fn cmd_cycle_config(
+    config_dir: &Path,
+    five_hour: Option<f64>,
+    weekly: Option<f64>,
+    mode: Option<String>,
+) -> Result<()> {
+    let mut cycle_config = load_cycle_config(config_dir)?;
+
+    if let Some(fh) = five_hour {
+        cycle_config.thresholds.five_hour = fh;
+    }
+    if let Some(w) = weekly {
+        cycle_config.thresholds.weekly = w;
+    }
+    if let Some(m) = mode {
+        if m != "and" && m != "or" {
+            anyhow::bail!("Mode must be 'and' or 'or'");
+        }
+        cycle_config.mode = m;
+    }
+
+    save_cycle_config(config_dir, &cycle_config)?;
+
+    println!("Cycle configuration updated:");
+    println!("  5h threshold:  {:.0}%", cycle_config.thresholds.five_hour);
+    println!("  Weekly threshold: {:.0}%", cycle_config.thresholds.weekly);
+    println!("  Mode: {}", cycle_config.mode);
+
+    Ok(())
+}
+
+fn cmd_cycle_enable(config_dir: &Path) -> Result<()> {
+    let mut cycle_config = load_cycle_config(config_dir)?;
+    cycle_config.enabled = true;
+    save_cycle_config(config_dir, &cycle_config)?;
+    println!("Cycling enabled.");
+    Ok(())
+}
+
+fn cmd_cycle_disable(config_dir: &Path) -> Result<()> {
+    let mut cycle_config = load_cycle_config(config_dir)?;
+    cycle_config.enabled = false;
+    save_cycle_config(config_dir, &cycle_config)?;
+    println!("Cycling disabled.");
+    Ok(())
+}
+
+fn should_cycle(usage: &UsageData, config: &CycleConfig) -> (bool, String) {
+    let five_hour_remaining = usage
+        .primary_window
+        .as_ref()
+        .map(|w| w.remaining_percent)
+        .unwrap_or(100.0);
+
+    let weekly_remaining = usage
+        .secondary_window
+        .as_ref()
+        .map(|w| w.remaining_percent)
+        .unwrap_or(100.0);
+
+    let five_hour_trigger = five_hour_remaining <= config.thresholds.five_hour;
+    let weekly_trigger = weekly_remaining <= config.thresholds.weekly;
+
+    let reason = if config.mode == "and" {
+        if five_hour_trigger && weekly_trigger {
+            let mut parts = Vec::new();
+            if five_hour_trigger {
+                parts.push(format!("5h: {:.0}% remaining", five_hour_remaining));
+            }
+            if weekly_trigger {
+                parts.push(format!("weekly: {:.0}% remaining", weekly_remaining));
+            }
+            (true, parts.join(", "))
+        } else {
+            (
+                false,
+                format!(
+                    "5h: {:.0}%, weekly: {:.0}%",
+                    five_hour_remaining, weekly_remaining
+                ),
+            )
+        }
+    } else {
+        if five_hour_trigger {
+            (true, format!("5h: {:.0}% remaining", five_hour_remaining))
+        } else if weekly_trigger {
+            (true, format!("weekly: {:.0}% remaining", weekly_remaining))
+        } else {
+            (
+                false,
+                format!(
+                    "5h: {:.0}%, weekly: {:.0}%",
+                    five_hour_remaining, weekly_remaining
+                ),
+            )
+        }
+    };
+
+    reason
+}
+
+fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
+    let cycle_config = load_cycle_config(config_dir)?;
+    let config = load_config(config_dir)?;
+
+    if !cycle_config.enabled {
+        println!("Cycling is disabled. Use 'codex-usage cycle enable' to enable.");
+        return Ok(());
+    }
+
+    let accounts: Vec<String> = if cycle_config.accounts.is_empty() {
+        config.accounts.keys().cloned().collect()
+    } else {
+        cycle_config.accounts.clone()
+    };
+
+    if accounts.is_empty() {
+        anyhow::bail!("No accounts configured. Add accounts first.");
+    }
+
+    let current = config
+        .active_account
+        .as_ref()
+        .map(|s| s.as_str())
+        .unwrap_or("");
+
+    let current_idx = accounts
+        .iter()
+        .position(|a| a.as_str() == current)
+        .unwrap_or(0);
+
+    let next_idx = (current_idx + 1) % accounts.len();
+    let next_account = &accounts[next_idx];
+
+    let account_auth_path = get_account_auth_path(config_dir, next_account);
+    let auth = load_codex_auth(&account_auth_path)?;
+
+    if let Some(auth) = auth {
+        if let Some(tokens) = auth.tokens {
+            if let (Some(access_token), Some(account_id)) =
+                (&tokens.access_token, &tokens.account_id)
+            {
+                let usage = fetch_usage(access_token, account_id)?;
+
+                let (should_switch, reason) = should_cycle(&usage, &cycle_config);
+
+                if should_switch {
+                    if is_codex_running() {
+                        warn_codex_running();
+                        if !force {
+                            anyhow::bail!("Aborted. Use --force to switch anyway.");
+                        }
+                    }
+
+                    let codex_auth = get_codex_auth_path();
+                    if codex_auth.exists() {
+                        let backup_path = codex_auth.with_extension("json.backup");
+                        fs::copy(&codex_auth, &backup_path).ok();
+                    }
+                    copy_auth_file(&account_auth_path, &codex_auth)?;
+
+                    let mut updated_config = load_config(config_dir)?;
+                    updated_config.active_account = Some(next_account.clone());
+                    save_config(config_dir, &updated_config)?;
+
+                    let mut updated_cycle = load_cycle_config(config_dir)?;
+                    updated_cycle.current_index = next_idx;
+                    updated_cycle.last_cycle = Some(chrono::Utc::now().to_rfc3339());
+                    save_cycle_config(config_dir, &updated_cycle)?;
+
+                    println!(
+                        "Cycled from '{}' to '{}' (reason: {})",
+                        current, next_account, reason
+                    );
+
+                    let history_entry = CycleHistoryEntry {
+                        timestamp: chrono::Utc::now().to_rfc3339(),
+                        from_account: current.to_string(),
+                        to_account: next_account.clone(),
+                        reason,
+                    };
+
+                    let history_path = get_cycle_history_path(config_dir);
+                    let line = serde_json::to_string(&history_entry)?;
+                    let mut file = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&history_path)?;
+                    use std::io::Write;
+                    writeln!(file, "{}", line)?;
+                } else {
+                    println!("No cycle needed (thresholds not met: {})", reason);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_cycle_history(config_dir: &Path) -> Result<()> {
+    let history_path = get_cycle_history_path(config_dir);
+
+    if !history_path.exists() {
+        println!("No cycle history found.");
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&history_path)?;
+    let lines: Vec<&str> = content.lines().collect();
+
+    if lines.is_empty() {
+        println!("No cycle history found.");
+        return Ok(());
+    }
+
+    println!("Cycle History:");
+    println!();
+
+    for line in lines.iter().rev().take(20) {
+        if let Ok(entry) = serde_json::from_str::<CycleHistoryEntry>(line) {
+            println!(
+                "  {}: {} -> {} ({})",
+                entry.timestamp, entry.from_account, entry.to_account, entry.reason
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()> {
+    let config = load_config(config_dir)?;
+
+    for name in &accounts {
+        if !config.accounts.contains_key(name) {
+            anyhow::bail!("Account '{}' not found. Use 'codex-usage accounts list' to see available accounts.", name);
+        }
+    }
+
+    let mut cycle_config = load_cycle_config(config_dir)?;
+    cycle_config.accounts = accounts.clone();
+
+    let current = config.active_account.as_ref().map(|s| s.as_str());
+    if let Some(c) = current {
+        if let Some(idx) = accounts.iter().position(|a| a.as_str() == c) {
+            cycle_config.current_index = idx;
+        }
+    }
+
+    save_cycle_config(config_dir, &cycle_config)?;
+
+    println!("Cycle accounts reordered:");
+    for (i, name) in accounts.iter().enumerate() {
+        println!("  {}. {}", i + 1, name);
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_dir = cli.config_dir.unwrap_or_else(get_config_dir);
@@ -878,6 +1317,44 @@ fn main() -> Result<()> {
             );
             println!("codex-usage wakeup - use --all to wakeup all accounts");
         }
+        Commands::Cycle { command } => match command {
+            CycleCommands::Status => {
+                cmd_cycle_status(&config_dir)?;
+            }
+            CycleCommands::Config {
+                five_hour,
+                weekly,
+                mode,
+            } => {
+                cmd_cycle_config(&config_dir, five_hour, weekly, mode)?;
+            }
+            CycleCommands::Enable => {
+                cmd_cycle_enable(&config_dir)?;
+            }
+            CycleCommands::Disable => {
+                cmd_cycle_disable(&config_dir)?;
+            }
+            CycleCommands::Now { force } => {
+                cmd_cycle_now(&config_dir, force)?;
+            }
+            CycleCommands::History => {
+                cmd_cycle_history(&config_dir)?;
+            }
+            CycleCommands::Reorder { accounts } => {
+                cmd_cycle_reorder(&config_dir, accounts)?;
+            }
+            CycleCommands::Schedule { command } => match command {
+                ScheduleCommands::Enable { interval } => {
+                    println!(
+                        "Schedule enable with interval {} minutes - not yet implemented",
+                        interval
+                    );
+                }
+                ScheduleCommands::Disable => {
+                    println!("Schedule disable - not yet implemented");
+                }
+            },
+        },
     }
 
     Ok(())
