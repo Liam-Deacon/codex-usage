@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
     branches: [main]
 
@@ -13,6 +14,7 @@ jobs:
   pre-commit:
     name: Pre-commit
     runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,6 +33,7 @@ jobs:
   build:
     name: Build (${{ matrix.os }})
     needs: [pre-commit]
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -65,37 +68,44 @@ jobs:
         run: cargo test --all
 
   release:
-    name: Release
-    needs: build
+    name: Release (${{ matrix.platform }})
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: linux-x64
-            target: x86_64-unknown-linux-gnu
-            artifact_name: codex-usage-x86_64-unknown-linux-gnu
-          - platform: linux-arm64
-            target: aarch64-unknown-linux-gnu
-            artifact_name: codex-usage-aarch64-unknown-linux-gnu
           - platform: macos-x64
             target: x86_64-apple-darwin
-            artifact_name: codex-usage-x86_64-apple-darwin
+            runs-on: macos-14
+            binary_name: codex-usage-x86_64-apple-darwin
           - platform: macos-arm64
             target: aarch64-apple-darwin
-            artifact_name: codex-usage-aarch64-apple-darwin
+            runs-on: macos-latest
+            binary_name: codex-usage-aarch64-apple-darwin
+          - platform: linux-x64
+            target: x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+            binary_name: codex-usage-x86_64-unknown-linux-gnu
+          - platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+            binary_name: codex-usage-aarch64-unknown-linux-gnu
+            cross: true
           - platform: windows-x64
             target: x86_64-pc-windows-msvc
-            artifact_name: codex-usage-x86_64-pc-windows-msvc.exe
+            runs-on: windows-latest
+            binary_name: codex-usage.exe
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up QEMU
-        if: matrix.platform == 'linux-arm64'
+        if: matrix.cross
         uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
@@ -103,40 +113,140 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
 
+      - name: Set up cross toolchain
+        if: matrix.cross
+        run: |
+          cargo install cross
+
       - name: Build release
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build release
+        if: "!matrix.cross"
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
-        shell: bash
-        run: |
-          mkdir -p release
-          if [[ "${{ matrix.platform }}" == windows* ]]; then
-            cp target/${{ matrix.target }}/release/codex-usage.exe ./release/codex-usage.exe
-          else
-            cp target/${{ matrix.target }}/release/codex-usage ./release/codex-usage
-            chmod +x ./release/codex-usage
-          fi
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
 
-      - name: Upload Release Asset
-        uses: softprops/action-gh-release@v1
+  publish:
+    name: Publish Release
+    needs: [release]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          file: release/*
+          files: |
+            artifacts/macos-x64/${{ matrix.binary_name }}
+            artifacts/macos-arm64/${{ matrix.binary_name }}
+            artifacts/linux-x64/${{ matrix.binary_name }}
+            artifacts/linux-arm64/${{ matrix.binary_name }}
+            artifacts/windows-x64/${{ matrix.binary_name }}
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  homebrew:
-    name: Homebrew
-    needs: release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  # packages:
+  #   name: Packages (RPM/DEB)
+  #   needs: release
+  #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - arch: amd64
+  #           target: x86_64-unknown-linux-gnu
+  #           rust_arch: x86_64
 
-      - name: Create Pull Request
-        run: |
-          # This would need to be customized based on the homebrew-tap repo
-          echo "Creating PR to Liam-Deacon/homebrew-tap..."
-          # PR creation would be handled manually or via another workflow
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+
+  #     - name: Set up Rust
+  #       uses: dtolnay/rust-toolchain@master
+  #       with:
+  #         toolchain: stable
+  #         target: ${{ matrix.target }}
+
+  #     - name: Install packaging tools
+  #       run: sudo apt-get update && sudo apt-get install -y dpkg-dev rpm
+
+  #     - name: Build
+  #       run: cargo build --release --target ${{ matrix.target }}
+
+  #     - name: Create DEB package
+  #       run: bash scripts/build-deb.sh "${{ matrix.arch }}" "${{ matrix.target }}" "${{ github.ref_name }}"
+  #       working-directory: ${{ github.workspace }}
+
+  #     - name: Create RPM package
+  #       run: bash scripts/build-rpm.sh "${{ matrix.arch }}" "${{ matrix.target }}" "${{ matrix.rust_arch }}" "${{ github.ref_name }}"
+  #       working-directory: ${{ github.workspace }}
+
+  #     - name: Upload Package Assets
+  #       uses: softprops/action-gh-release@v1
+  #       with:
+  #         tag_name: ${{ github.ref_name }}
+  #         files: release/*.deb release/*.rpm
+  #         draft: true
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # source:
+  #   name: Source Tarball
+  #   needs: []
+  #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
+
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+
+  #     - name: Create source tarball
+  #       run: bash scripts/build-source.sh "${{ github.ref_name }}"
+
+  #     - name: Upload Source
+  #       uses: softprops/action-gh-release@v1
+  #       with:
+  #         tag_name: ${{ github.ref_name }}
+  #         files: release/*.tar.gz
+  #         draft: true
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # homebrew:
+  #   name: Homebrew
+  #   needs: release
+  #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
+
+  #     - name: Create Homebrew formula PR
+  #       uses: peter-evans/create-pull-request@v6
+  #       with:
+  #         token: ${{ secrets.GITHUB_TOKEN }}
+  #         commit-message: "Update codex-usage to ${{ github.ref_name }}"
+  #         title: "Update codex-usage to ${{ github.ref_name }}"
+  #         body: |
+  #           Automated PR to update Homebrew formula for release ${{ github.ref_name }}.
+  #
+  #           Note: SHA256 hashes need to be updated before merging.
+  #           Run `brew audit --strict Formula/codex-usage.rb` to verify.
+  #         branch: homebrew-update
+  #         base: main
+  #         repository: Liam-Deacon/homebrew-tap
+  #         path: Formula/codex-usage.rb
+  #         add-paths: Formula/codex-usage.rb
