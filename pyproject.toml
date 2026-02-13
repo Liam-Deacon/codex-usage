@@ -14,5 +14,20 @@ authors = [
 requires-python = ">=3.8"
 dependencies = []
 
+[project.scripts]
+codex-usage = "codex_usage:run"
+
 [tool.maturin]
-features = ["pyo3/extension-module"]
+features = ["pyo3"]
+python-source = "src"
+module-name = "codex_usage"
+
+[tool.cibuildwheel]
+# cibuildwheel configuration for maturin-based builds
+build = "cp38-manylinux* cp38-macosx* cp38-win*"
+skip = "*-musllinux*"
+manylinux-images = { x86_64 = "manylinux2014", aarch64 = "manylinux2014" }
+
+[[tool.cibuildwheel.test]]
+# Don't run tests during wheel build (Rust tests run separately)
+skip = true
