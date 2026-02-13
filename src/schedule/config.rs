@@ -1,5 +1,4 @@
 use chrono::NaiveTime;
-use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
@@ -24,7 +23,7 @@ pub struct WakeupSchedule {
 }
 
 mod serde_duration {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde::{Deserialize, Deserializer, Serializer};
     use std::time::Duration;
 
     pub fn serialize<S>(duration: &Option<Duration>, serializer: S) -> Result<S::Ok, S::Error>
@@ -32,7 +31,7 @@ mod serde_duration {
         S: Serializer,
     {
         match duration {
-            Some(d) => serializer.serialize_some(&d.as_secs()),
+            Some(d) => serializer.serialize_some(&d.as_secs_f64()),
             None => serializer.serialize_none(),
         }
     }
@@ -41,8 +40,8 @@ mod serde_duration {
     where
         D: Deserializer<'de>,
     {
-        let secs: Option<u64> = Option::deserialize(deserializer)?;
-        Ok(secs.map(Duration::from_secs))
+        let secs: Option<f64> = Option::deserialize(deserializer)?;
+        Ok(secs.map(Duration::from_secs_f64))
     }
 }
 
@@ -92,12 +91,6 @@ impl WakeupSchedule {
             return Err(ScheduleError::NoTimesSpecified);
         }
 
-        for time in &self.times {
-            if time.hour() > 23 || time.minute() > 59 {
-                return Err(ScheduleError::InvalidTime(time.format("%H:%M").to_string()));
-            }
-        }
-
         Ok(())
     }
 }
@@ -115,7 +108,11 @@ impl WakeupConfig {
     }
 
     pub fn add_schedule(&mut self, schedule: WakeupSchedule) {
-        self.schedules.push(schedule);
+        if let Some(existing) = self.schedules.iter_mut().find(|s| s.name == schedule.name) {
+            *existing = schedule;
+        } else {
+            self.schedules.push(schedule);
+        }
     }
 
     pub fn get_schedule(&self, name: &str) -> Option<&WakeupSchedule> {

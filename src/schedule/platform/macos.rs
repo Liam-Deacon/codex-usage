@@ -2,11 +2,20 @@ use crate::schedule::config::WakeupSchedule;
 use crate::schedule::parse::format_time;
 use anyhow::{Context, Result};
 use chrono::Timelike;
+use plist::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
 const LAUNCH_AGENT_LABEL: &str = "com.codex-usage.wakeup";
+
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
 
 pub fn get_launch_agent_path() -> Result<PathBuf> {
     let home = dirs::home_dir().context("Could not find home directory")?;
@@ -22,7 +31,6 @@ pub fn install_schedule(schedule: &WakeupSchedule) -> Result<()> {
     }
 
     let times_str: Vec<String> = schedule.times.iter().map(format_time).collect();
-    let times_arg = times_str.join(",");
 
     let mut program_args = vec!["wakeup".to_string(), "--run".to_string()];
     if let Some(ref account) = schedule.account {
@@ -55,10 +63,10 @@ pub fn install_schedule(schedule: &WakeupSchedule) -> Result<()> {
     <false/>
 </dict>
 </plist>"#,
-        LAUNCH_AGENT_LABEL,
+        escape_xml(LAUNCH_AGENT_LABEL),
         program_args
             .iter()
-            .map(|s| format!("<string>{}</string>", s))
+            .map(|s| format!("<string>{}</string>", escape_xml(s)))
             .collect::<Vec<_>>()
             .join("\n        "),
         schedule
@@ -75,11 +83,20 @@ pub fn install_schedule(schedule: &WakeupSchedule) -> Result<()> {
 
     fs::write(&plist_path, plist_content).context("Failed to write launchd plist")?;
 
-    Command::new("launchctl")
-        .arg("load")
+    let uid = nix::unistd::Uid::current().as_raw();
+    let target = format!("gui/{}", uid);
+
+    let output = Command::new("launchctl")
+        .arg("bootstrap")
+        .arg(&target)
         .arg(&plist_path)
         .output()
-        .context("Failed to load launchd agent")?;
+        .context("Failed to bootstrap launchd agent")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to bootstrap launchd agent: {}", stderr);
+    }
 
     println!(
         "Installed wakeup schedule: {} at {}",
@@ -98,11 +115,19 @@ pub fn remove_schedule() -> Result<()> {
     let plist_path = get_launch_agent_path()?;
 
     if plist_path.exists() {
-        Command::new("launchctl")
-            .arg("unload")
-            .arg(&plist_path)
+        let uid = nix::unistd::Uid::current().as_raw();
+        let target = format!("gui/{}/{}", uid, LAUNCH_AGENT_LABEL);
+
+        let output = Command::new("launchctl")
+            .arg("bootout")
+            .arg(&target)
             .output()
-            .context("Failed to unload launchd agent")?;
+            .context("Failed to bootout launchd agent")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Failed to bootout launchd agent: {}", stderr);
+        }
 
         fs::remove_file(&plist_path).context("Failed to remove launchd plist")?;
         println!("Removed wakeup schedule.");
@@ -121,9 +146,37 @@ pub fn list_schedules() -> Result<Vec<String>> {
     }
 
     let content = fs::read_to_string(&plist_path)?;
+
+    if !content.contains(LAUNCH_AGENT_LABEL) {
+        return Ok(Vec::new());
+    }
+
+    let plist = Value::from_reader_xml(content.as_bytes()).context("Failed to parse plist")?;
+
+    let dict = plist.as_dictionary().context("Plist is not a dictionary")?;
+
     let mut schedules = Vec::new();
 
-    if content.contains(LAUNCH_AGENT_LABEL) {
+    if let Some(calendar_intervals) = dict.get("StartCalendarInterval") {
+        if let Some(intervals) = calendar_intervals.as_array() {
+            for interval in intervals {
+                if let Some(interval_dict) = interval.as_dictionary() {
+                    let hour: u64 = interval_dict
+                        .get("Hour")
+                        .and_then(|v: &Value| v.as_unsigned_integer())
+                        .unwrap_or(0);
+                    let minute: u64 = interval_dict
+                        .get("Minute")
+                        .and_then(|v: &Value| v.as_unsigned_integer())
+                        .unwrap_or(0);
+                    let time_str = format!("{:02}:{:02}", hour, minute);
+                    schedules.push(time_str);
+                }
+            }
+        }
+    }
+
+    if schedules.is_empty() {
         schedules.push(LAUNCH_AGENT_LABEL.to_string());
     }
 
@@ -131,40 +184,54 @@ pub fn list_schedules() -> Result<Vec<String>> {
 }
 
 fn install_system_wake(times: &[chrono::NaiveTime]) -> Result<()> {
-    let days = "MTWRF";
-    let times_str: Vec<String> = times
-        .iter()
-        .map(|t| t.format("%H:%M:%S").to_string())
-        .collect();
-    let schedule_str = times_str.join(" ");
+    use nix::unistd::Uid;
 
-    let output = Command::new("pmset")
-        .arg("repeat")
-        .arg("wakeorpoweron")
-        .arg(days)
-        .arg(&schedule_str)
-        .output()
-        .context("Failed to set pmset wake schedule")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to set system wake: {}", stderr);
+    if !Uid::effective().is_root() {
+        anyhow::bail!("--wake-system requires root privileges. Run with sudo.");
     }
 
-    println!("Configured system wake for {} at {}", days, schedule_str);
+    let days = "MTWRF";
+
+    for time in times {
+        let schedule_str = time.format("%H:%M:%S").to_string();
+
+        let output = Command::new("pmset")
+            .arg("repeat")
+            .arg("wakeorpoweron")
+            .arg(days)
+            .arg(&schedule_str)
+            .output()
+            .context("Failed to set pmset wake schedule")?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("Failed to set system wake: {}", stderr);
+        }
+
+        println!("Configured system wake for {} at {}", days, schedule_str);
+    }
+
     Ok(())
 }
 
 fn remove_system_wake() -> Result<()> {
+    use nix::unistd::Uid;
+
+    if !Uid::effective().is_root() {
+        anyhow::bail!("--wake-system requires root privileges. Run with sudo.");
+    }
+
     let output = Command::new("pmset")
         .arg("repeat")
         .arg("cancel")
         .output()
         .context("Failed to cancel pmset wake schedule")?;
 
-    if output.status.success() {
-        println!("Removed system wake schedule.");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to cancel system wake: {}", stderr);
     }
 
+    println!("Removed system wake schedule.");
     Ok(())
 }

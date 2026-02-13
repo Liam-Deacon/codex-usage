@@ -21,24 +21,41 @@ pub fn parse_time(input: &str) -> Result<NaiveTime, ParseError> {
         return Ok(time);
     }
 
-    let (hours, remainder) = input
-        .split_once(':')
-        .ok_or_else(|| ParseError::InvalidTime(input.clone()))?;
+    let is_pm = input.ends_with("pm");
+    let is_am = input.ends_with("am");
 
-    let hours: u32 = hours
-        .parse()
-        .map_err(|_| ParseError::InvalidTime(input.clone()))?;
+    if is_pm || is_am {
+        let core_input = input.trim_end_matches("pm").trim_end_matches("am");
+        let (hours_str, minutes_str) = if core_input.contains(':') {
+            let parts: Vec<&str> = core_input.split(':').collect();
+            (parts[0], parts.get(1).copied())
+        } else {
+            (core_input, None)
+        };
 
-    if input.ends_with("pm") && hours <= 12 {
-        let hours = if hours == 12 { 12 } else { hours + 12 };
-        let minutes: u32 = remainder.trim_end_matches("pm").parse().unwrap_or(0);
-        return Ok(NaiveTime::from_hms_opt(hours % 24, minutes, 0)
-            .ok_or_else(|| ParseError::InvalidTime(input.clone()))?);
-    }
+        let hours: u32 = hours_str
+            .parse()
+            .map_err(|_| ParseError::InvalidTime(input.clone()))?;
 
-    if input.ends_with("am") && hours <= 12 {
-        let hours = if hours == 12 { 0 } else { hours };
-        let minutes: u32 = remainder.trim_end_matches("am").parse().unwrap_or(0);
+        let minutes: u32 = minutes_str
+            .unwrap_or("0")
+            .parse()
+            .map_err(|_| ParseError::InvalidTime(input.clone()))?;
+
+        let hours = if is_pm {
+            if hours == 12 {
+                12
+            } else {
+                hours + 12
+            }
+        } else {
+            if hours == 12 {
+                0
+            } else {
+                hours
+            }
+        };
+
         return Ok(NaiveTime::from_hms_opt(hours % 24, minutes, 0)
             .ok_or_else(|| ParseError::InvalidTime(input.clone()))?);
     }
@@ -99,8 +116,15 @@ pub fn format_duration(duration: &Duration) -> String {
         let days = total_secs / 86400;
         let remainder = total_secs % 86400;
         let hours = remainder / 3600;
+        let minutes = (remainder % 3600) / 60;
         if hours > 0 {
-            format!("{}d{}h", days, hours)
+            if minutes > 0 {
+                format!("{}d{}h{}m", days, hours, minutes)
+            } else {
+                format!("{}d{}h", days, hours)
+            }
+        } else if minutes > 0 {
+            format!("{}d{}m", days, minutes)
         } else {
             format!("{}d", days)
         }

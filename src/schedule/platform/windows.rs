@@ -22,12 +22,14 @@ pub fn install_schedule(schedule: &WakeupSchedule) -> Result<()> {
     for time_str in &times_str {
         let task_name = format!("{}_{}", TASK_NAME, time_str.replace(":", ""));
 
+        let quoted_args: Vec<String> = args.iter().map(|a| format!("\"{}\"", a)).collect();
+
         let mut cmd = Command::new("schtasks");
         cmd.arg("/create");
         cmd.arg("/tn");
         cmd.arg(&task_name);
         cmd.arg("/tr");
-        cmd.arg(format!("\"{}\" {}", exe_path, args.join(" ")));
+        cmd.arg(format!("\"{}\" {}", exe_path, quoted_args.join(" ")));
         cmd.arg("/sc");
         cmd.arg("daily");
         cmd.arg("/st");
@@ -68,11 +70,20 @@ pub fn remove_schedule() -> Result<()> {
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
             if line.contains(TASK_NAME) {
-                let task_name = line.trim();
+                let task_name = if let Some((_, name)) = line.split_once(':') {
+                    name.trim().to_string()
+                } else {
+                    line.trim().to_string()
+                };
+
+                if task_name.is_empty() {
+                    continue;
+                }
+
                 let del_output = Command::new("schtasks")
                     .arg("/delete")
                     .arg("/tn")
-                    .arg(task_name)
+                    .arg(&task_name)
                     .arg("/f")
                     .output();
 
@@ -107,7 +118,13 @@ pub fn list_schedules() -> Result<Vec<String>> {
         stdout
             .lines()
             .filter(|line| line.contains(TASK_NAME))
-            .map(|s| s.trim().to_string())
+            .filter_map(|s| {
+                if let Some((_, name)) = s.split_once(':') {
+                    Some(name.trim().to_string())
+                } else {
+                    Some(s.trim().to_string())
+                }
+            })
             .collect()
     } else {
         Vec::new()
@@ -116,13 +133,24 @@ pub fn list_schedules() -> Result<Vec<String>> {
     Ok(schedules)
 }
 
+/// Enables system wake from sleep on Windows.
+///
+/// Note: Windows does not support automated wake-from-sleep scheduling via CLI.
+/// Users must manually configure power settings:
+///   powercfg /deviceenablewake "<device name>"
+/// Or use: Control Panel > Hardware > Power Management > Allow wake timers
 fn enable_system_wake() -> Result<()> {
+    // TODO: implement Windows wake configuration via powercfg or return a specific Err variant
     println!("Note: To enable wake from sleep on Windows, configure power settings:");
     println!("  powercfg /deviceenablewake \"<device name>\"");
     println!("Or use: Control Panel > Hardware > Power Management > Allow wake timers");
     Ok(())
 }
 
+/// Disables system wake from sleep on Windows.
+///
+/// Note: Windows does not support automated wake-from-sleep scheduling via CLI.
 fn disable_system_wake() -> Result<()> {
+    // TODO: implement Windows wake configuration via powercfg or return a specific Err variant
     Ok(())
 }
