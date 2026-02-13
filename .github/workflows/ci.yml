@@ -68,29 +68,29 @@ jobs:
         run: cargo test --all
 
   release:
-    name: Release
+    name: Release (${{ matrix.platform }})
     needs: []
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs-on }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: linux-x64
             target: x86_64-unknown-linux-gnu
-            artifact_name: codex-usage-x86_64-unknown-linux-gnu
+            runs-on: ubuntu-latest
           - platform: linux-arm64
             target: aarch64-unknown-linux-gnu
-            artifact_name: codex-usage-aarch64-unknown-linux-gnu
+            runs-on: ubuntu-latest
           - platform: macos-x64
             target: x86_64-apple-darwin
-            artifact_name: codex-usage-x86_64-apple-darwin
+            runs-on: macos-latest
           - platform: macos-arm64
             target: aarch64-apple-darwin
-            artifact_name: codex-usage-aarch64-apple-darwin
+            runs-on: macos-latest
           - platform: windows-x64
             target: x86_64-pc-windows-msvc
-            artifact_name: codex-usage-x86_64-pc-windows-msvc.exe
+            runs-on: windows-latest
 
     steps:
       - name: Checkout
@@ -130,7 +130,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          file: release/*
+          files: release/*
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -185,7 +185,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          file: release/*.deb release/*.rpm
+          files: release/*.deb release/*.rpm
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -207,7 +207,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          file: release/*.tar.gz
+          files: release/*.tar.gz
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -224,7 +224,7 @@ jobs:
       - name: Create Homebrew formula PR
         uses: peter-evans/create-pull-request@v6
         with:
-          token: ${{ secrets.GH_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "Update codex-usage to ${{ github.ref_name }}"
           title: "Update codex-usage to ${{ github.ref_name }}"
           body: |
