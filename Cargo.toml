@@ -1,0 +1,38 @@
+[package]
+name = "codex-usage"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tool to track OpenAI Codex usage with multi-account support"
+authors = ["Liam Deacon <liam@deacon.dev>"]
+license = "MIT"
+repository = "https://github.com/Liam-Deacon/codex-usage"
+rust-version = "1.70"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive", "env"] }
+clap_complete = "4.5"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1.40", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+dirs = "5.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = ["Win32_System_Threading", "Win32_Foundation"] }
+
+[dev-dependencies]
+tempfile = "3.12"
+assert_cmd = "2.0"
+predicates = "3.1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
