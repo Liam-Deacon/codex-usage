@@ -1,0 +1,12 @@
+target/
+.git/
+.github/
+.worktree/
+*.md
+CMakeLists.txt
+pyproject.toml
+scoop/
+.env
+.env.*
+*.log
+.DS_Store
