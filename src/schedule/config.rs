@@ -7,6 +7,7 @@ use thiserror::Error;
 pub enum ScheduleError {
     #[error("At least one time must be specified")]
     NoTimesSpecified,
+    #[allow(dead_code)]
     #[error("Invalid time: {0}")]
     InvalidTime(String),
 }
@@ -115,10 +116,12 @@ impl WakeupConfig {
         }
     }
 
+    #[allow(dead_code)]
     pub fn get_schedule(&self, name: &str) -> Option<&WakeupSchedule> {
         self.schedules.iter().find(|s| s.name == name)
     }
 
+    #[allow(dead_code)]
     pub fn get_schedule_mut(&mut self, name: &str) -> Option<&mut WakeupSchedule> {
         self.schedules.iter_mut().find(|s| s.name == name)
     }
@@ -127,5 +130,9 @@ impl WakeupConfig {
         let len_before = self.schedules.len();
         self.schedules.retain(|s| s.name != name);
         self.schedules.len() < len_before
+    }
+
+    pub fn clear_schedules(&mut self) {
+        self.schedules.clear();
     }
 }

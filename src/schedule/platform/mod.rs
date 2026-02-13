@@ -11,12 +11,15 @@ pub mod unix;
 pub mod windows;
 
 #[cfg(target_os = "macos")]
+#[allow(unused_imports)]
 pub use macos::*;
 
 #[cfg(target_os = "linux")]
+#[allow(unused_imports)]
 pub use unix::*;
 
 #[cfg(target_os = "windows")]
+#[allow(unused_imports)]
 pub use windows::*;
 
 pub fn install(schedule: &WakeupSchedule) -> Result<()> {
