@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
 use std::process::Command;
 
 #[derive(Parser)]
