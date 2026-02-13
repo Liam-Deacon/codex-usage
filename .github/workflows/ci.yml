@@ -69,7 +69,6 @@ jobs:
 
   release:
     name: Release (${{ matrix.platform }})
-    needs: []
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ${{ matrix.runs-on }}
     strategy:
@@ -114,14 +113,24 @@ jobs:
           toolchain: stable
           target: ${{ matrix.target }}
 
+      - name: Set up cross toolchain
+        if: matrix.cross
+        run: |
+          cargo install cross
+
       - name: Build release
+        if: matrix.cross
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Build release
+        if: "!matrix.cross"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
-          path: target/${{ matrix.target }}/release/codex-usage
+          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
 
   publish:
     name: Publish Release
@@ -135,15 +144,15 @@ jobs:
           path: artifacts
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            artifacts/macos-x64/codex-usage
-            artifacts/macos-arm64/codex-usage
-            artifacts/linux-x64/codex-usage
-            artifacts/linux-arm64/codex-usage
-            artifacts/windows-x64/codex-usage.exe
+            artifacts/macos-x64/${{ matrix.binary_name }}
+            artifacts/macos-arm64/${{ matrix.binary_name }}
+            artifacts/linux-x64/${{ matrix.binary_name }}
+            artifacts/linux-arm64/${{ matrix.binary_name }}
+            artifacts/windows-x64/${{ matrix.binary_name }}
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
