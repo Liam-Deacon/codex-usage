@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -9,11 +10,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(feature = "pyo3")]
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::PyModule};
 
 #[cfg(feature = "pyo3")]
 #[pymodule]
-fn codex_usage(_py: Python, m: &PyModule) -> PyResult<()> {
+fn codex_usage(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_py, m)?)?;
     Ok(())
 }
@@ -212,7 +213,7 @@ pub struct AccountInfo {
     pub auth_hash: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CycleConfig {
     pub enabled: bool,
     pub thresholds: CycleThresholds,
@@ -220,6 +221,19 @@ pub struct CycleConfig {
     pub accounts: Vec<String>,
     pub current_index: usize,
     pub last_cycle: Option<String>,
+}
+
+impl Default for CycleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            thresholds: CycleThresholds::default(),
+            mode: "and".to_string(),
+            accounts: Vec::new(),
+            current_index: 0,
+            last_cycle: None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -250,7 +264,7 @@ pub struct CodexTokens {
     pub account_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct UsageData {
     pub account_name: String,
     pub status: String,
@@ -262,7 +276,7 @@ pub struct UsageData {
     pub auth_type: String,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RateWindow {
     pub used_percent: f64,
     pub remaining_percent: f64,
@@ -270,7 +284,7 @@ pub struct RateWindow {
     pub resets_in: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CodeReview {
     pub used_percent: f64,
 }
@@ -368,9 +382,19 @@ pub fn load_codex_auth(path: &Path) -> Result<Option<CodexAuth>> {
 fn is_codex_running() -> bool {
     #[cfg(unix)]
     {
-        let output = Command::new("pgrep").arg("-f").arg("codex").output();
+        let current_pid = std::process::id();
+        let output = Command::new("pgrep").arg("-f").arg("codex ").output();
         if let Ok(output) = output {
-            return output.status.success();
+            if output.status.success() {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                for line in pids.lines() {
+                    if let Ok(pid) = line.trim().parse::<u32>() {
+                        if pid != current_pid {
+                            return true;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -453,7 +477,7 @@ pub fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
     }
 
     let auth_content = fs::read_to_string(&codex_auth)?;
-    let auth_hash = format!("{:x}", md5::compute(auth_content.as_bytes()));
+    let auth_hash = format!("{:x}", Sha256::digest(auth_content.as_bytes()));
 
     let mut config = load_config(config_dir)?;
 
@@ -645,8 +669,11 @@ fn parse_usage_response(data: serde_json::Value, account_name: &str) -> UsageDat
     usage
 }
 
-fn fetch_usage(access_token: &str, account_id: &str) -> Result<UsageData> {
-    let client = reqwest::blocking::Client::new();
+fn fetch_usage(
+    client: &reqwest::blocking::Client,
+    access_token: &str,
+    account_id: &str,
+) -> Result<UsageData> {
     let response = client
         .get(USAGE_API_URL)
         .header("Authorization", format!("Bearer {}", access_token))
@@ -694,70 +721,7 @@ fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
         return None;
     }
 
-    let account_name = data
-        .get("account_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let status = data
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("error")
-        .to_string();
-    let plan = data
-        .get("plan")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let limit_reached = data
-        .get("limit_reached")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let auth_type = data
-        .get("auth_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let primary_window = data.get("primary_window").and_then(|pw| {
-        Some(RateWindow {
-            used_percent: pw.get("used_percent")?.as_f64()?,
-            remaining_percent: pw.get("remaining_percent")?.as_f64()?,
-            window: pw.get("window")?.as_str()?.to_string(),
-            resets_in: pw
-                .get("resets_in")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        })
-    });
-
-    let secondary_window = data.get("secondary_window").and_then(|sw| {
-        Some(RateWindow {
-            used_percent: sw.get("used_percent")?.as_f64()?,
-            remaining_percent: sw.get("remaining_percent")?.as_f64()?,
-            window: sw.get("window")?.as_str()?.to_string(),
-            resets_in: sw
-                .get("resets_in")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        })
-    });
-
-    let code_review = data.get("code_review").and_then(|cr| {
-        Some(CodeReview {
-            used_percent: cr.get("used_percent")?.as_f64()?,
-        })
-    });
-
-    Some(UsageData {
-        account_name,
-        status,
-        plan,
-        primary_window,
-        secondary_window,
-        code_review,
-        limit_reached,
-        auth_type,
-    })
+    serde_json::from_value(data.clone()).ok()
 }
 
 fn save_cache(config_dir: &Path, usage: &UsageData) -> Result<()> {
@@ -829,7 +793,8 @@ pub fn cmd_status(
                             }
                         }
 
-                        match fetch_usage(access_token, account_id) {
+                        let client = reqwest::blocking::Client::new();
+                        match fetch_usage(&client, access_token, account_id) {
                             Ok(usage) => {
                                 let _ = save_cache(config_dir, &usage);
                                 if json {
@@ -855,6 +820,7 @@ pub fn cmd_status(
     }
 
     let mut all_usages: Vec<UsageData> = Vec::new();
+    let client = reqwest::blocking::Client::new();
 
     for account_name in &accounts_to_check {
         let account_auth_path = get_account_auth_path(config_dir, account_name);
@@ -874,7 +840,7 @@ pub fn cmd_status(
                         }
                     }
 
-                    match fetch_usage(access_token, account_id) {
+                    match fetch_usage(&client, access_token, account_id) {
                         Ok(mut usage) => {
                             usage.account_name = account_name.clone();
                             let _ = save_cache(config_dir, &usage);
@@ -893,20 +859,31 @@ pub fn cmd_status(
         anyhow::bail!("No usage data available for any account.");
     }
 
+    let usage_map: HashMap<String, UsageData> = all_usages
+        .into_iter()
+        .map(|u| (u.account_name.clone(), u))
+        .collect();
+
     if json {
-        if all_usages.len() == 1 {
-            println!("{}", serde_json::to_string_pretty(&all_usages[0])?);
+        if usage_map.len() == 1 {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&usage_map.values().next())?
+            );
         } else {
-            println!("{}", serde_json::to_string_pretty(&all_usages)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&usage_map.values().collect::<Vec<_>>())?
+            );
         }
     } else if oneline {
-        for usage in &all_usages {
+        for usage in usage_map.values() {
             print_oneline(usage);
         }
     } else {
-        for (i, account_name) in accounts_to_check.iter().enumerate() {
+        for account_name in &accounts_to_check {
             let is_current = config.active_account.as_deref() == Some(account_name.as_str());
-            if let Some(usage) = all_usages.get(i) {
+            if let Some(usage) = usage_map.get(account_name) {
                 print_usage(usage, is_current);
                 println!();
             }
@@ -1119,13 +1096,10 @@ fn should_cycle(usage: &UsageData, config: &CycleConfig) -> (bool, String) {
 
     let reason = if config.mode == "and" {
         if five_hour_trigger && weekly_trigger {
-            let mut parts = Vec::new();
-            if five_hour_trigger {
-                parts.push(format!("5h: {:.0}% remaining", five_hour_remaining));
-            }
-            if weekly_trigger {
-                parts.push(format!("weekly: {:.0}% remaining", weekly_remaining));
-            }
+            let parts = vec![
+                format!("5h: {:.0}% remaining", five_hour_remaining),
+                format!("weekly: {:.0}% remaining", weekly_remaining),
+            ];
             (true, parts.join(", "))
         } else {
             (
@@ -1182,15 +1156,17 @@ pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
     let next_idx = (current_idx + 1) % accounts.len();
     let next_account = &accounts[next_idx];
 
-    let account_auth_path = get_account_auth_path(config_dir, next_account);
-    let auth = load_codex_auth(&account_auth_path)?;
+    let current_account_auth_path = get_account_auth_path(config_dir, current);
+    let current_auth = load_codex_auth(&current_account_auth_path)?;
 
-    if let Some(auth) = auth {
+    let client = reqwest::blocking::Client::new();
+
+    if let Some(auth) = current_auth {
         if let Some(tokens) = auth.tokens {
             if let (Some(access_token), Some(account_id)) =
                 (&tokens.access_token, &tokens.account_id)
             {
-                let usage = fetch_usage(access_token, account_id)?;
+                let usage = fetch_usage(&client, access_token, account_id)?;
 
                 let (should_switch, reason) = should_cycle(&usage, &cycle_config);
 
@@ -1207,7 +1183,8 @@ pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
                         let backup_path = codex_auth.with_extension("json.backup");
                         fs::copy(&codex_auth, &backup_path).ok();
                     }
-                    copy_auth_file(&account_auth_path, &codex_auth)?;
+                    let next_account_auth_path = get_account_auth_path(config_dir, next_account);
+                    copy_auth_file(&next_account_auth_path, &codex_auth)?;
 
                     let mut updated_config = load_config(config_dir)?;
                     updated_config.active_account = Some(next_account.clone());

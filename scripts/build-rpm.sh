@@ -1,13 +1,12 @@
 #!/bin/bash
 set -e
 
-ARCH="$1"
-TARGET="$2"
-RUST_ARCH="$3"
-VERSION="$4"
+TARGET="$1"
+RUST_ARCH="$2"
+VERSION="$3"
 
-if [ -z "$ARCH" ] || [ -z "$TARGET" ] || [ -z "$RUST_ARCH" ] || [ -z "$VERSION" ]; then
-    echo "Usage: $0 <arch> <target> <rust_arch> <version>"
+if [ -z "$TARGET" ] || [ -z "$RUST_ARCH" ] || [ -z "$VERSION" ]; then
+    echo "Usage: $0 <target> <rust_arch> <version>"
     exit 1
 fi
 
@@ -46,6 +45,6 @@ SPECFILE
 sed -i "s/__VERSION__/${RPM_VERSION}/g" rpmbuild/SPECS/codex-usage.spec
 sed -i "s/__ARCH__/${RUST_ARCH}/g" rpmbuild/SPECS/codex-usage.spec
 
-rpmbuild --target "$RUST_ARCH-redhat-linux" -bb rpmbuild/SPECS/codex-usage.spec
+rpmbuild --target "$RUST_ARCH-redhat-linux" --define "_topdir $(pwd)/rpmbuild" -bb rpmbuild/SPECS/codex-usage.spec
 cp "rpmbuild/RPMS/$RUST_ARCH"/*.rpm release/
 rm -rf rpmbuild
