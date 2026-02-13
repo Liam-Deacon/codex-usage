@@ -129,7 +129,7 @@ pub fn remove_schedule() -> Result<()> {
                     if let Some(args) = dict.get("ProgramArguments").and_then(|v| v.as_array()) {
                         should_remove_system_wake = args
                             .iter()
-                            .any(|arg| arg.as_string().map_or(false, |s| s == "--wake-system"));
+                            .any(|arg| arg.as_string() == Some("--wake-system"));
                     }
                 }
             }
