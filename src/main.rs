@@ -111,6 +111,47 @@ struct AccountInfo {
     last_used: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Clone)]
+struct CodexAuth {
+    #[serde(rename = "OPENAI_API_KEY")]
+    api_key: Option<String>,
+    tokens: Option<CodexTokens>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+struct CodexTokens {
+    access_token: Option<String>,
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct UsageData {
+    pub account_name: String,
+    pub status: String,
+    pub plan: Option<String>,
+    pub primary_window: Option<RateWindow>,
+    pub secondary_window: Option<RateWindow>,
+    pub code_review: Option<CodeReview>,
+    pub limit_reached: bool,
+    pub auth_type: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct RateWindow {
+    pub used_percent: f64,
+    pub remaining_percent: f64,
+    pub window: String,
+    pub resets_in: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct CodeReview {
+    pub used_percent: f64,
+}
+
+const USAGE_API_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
+const CACHE_TTL_SECS: u64 = 300;
+
 fn get_config_dir() -> PathBuf {
     dirs::home_dir()
         .map(|p| p.join(".codex-usage"))
@@ -139,6 +180,10 @@ fn get_config_path(config_dir: &Path) -> PathBuf {
     config_dir.join("config.json")
 }
 
+fn get_cache_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("usage_cache.json")
+}
+
 fn load_config(config_dir: &Path) -> Result<Config> {
     let config_path = get_config_path(config_dir);
     if config_path.exists() {
@@ -157,21 +202,26 @@ fn save_config(config_dir: &Path, config: &Config) -> Result<()> {
     Ok(())
 }
 
+fn load_codex_auth(path: &Path) -> Result<Option<CodexAuth>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(path)?;
+    let auth: CodexAuth = serde_json::from_str(&content).context("Failed to parse auth.json")?;
+    Ok(Some(auth))
+}
+
 fn is_codex_running() -> bool {
-    // Check for codex process on Unix-like systems
     #[cfg(unix)]
     {
         let output = Command::new("pgrep").arg("-f").arg("codex").output();
-
         if let Ok(output) = output {
             return output.status.success();
         }
     }
 
-    // Check for lock file
     let lock_path = get_codex_dir().join(".codex.lock");
     if lock_path.exists() {
-        // Check if process is actually running by reading lock file
         if let Ok(content) = fs::read_to_string(&lock_path) {
             let pid: u32 = content.trim().parse().unwrap_or(0);
             if pid > 0 {
@@ -186,7 +236,7 @@ fn is_codex_running() -> bool {
                 }
                 #[cfg(windows)]
                 {
-                    return true; // Assume running if lock exists on Windows
+                    return true;
                 }
             }
         }
@@ -205,19 +255,15 @@ fn copy_auth_file(from: &Path, to: &Path) -> Result<()> {
     if !from.exists() {
         anyhow::bail!("Source auth file not found: {:?}", from);
     }
-
-    // Ensure parent directory exists
     if let Some(parent) = to.parent() {
         fs::create_dir_all(parent).context("Failed to create parent directory")?;
     }
-
     fs::copy(from, to).context("Failed to copy auth file")?;
     Ok(())
 }
 
 fn cmd_accounts_list(config_dir: &Path) -> Result<()> {
     let config = load_config(config_dir)?;
-
     if config.accounts.is_empty() {
         println!("No accounts configured. Run 'codex-usage accounts add <name>' to add one.");
         return Ok(());
@@ -246,7 +292,6 @@ fn cmd_accounts_list(config_dir: &Path) -> Result<()> {
 
 fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
     let codex_auth = get_codex_auth_path();
-
     if !codex_auth.exists() {
         anyhow::bail!(
             "No Codex auth found. Please run 'codex login' first to authenticate with Codex."
@@ -254,15 +299,10 @@ fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
     }
 
     let account_auth_path = get_account_auth_path(config_dir, name);
-
-    // Create accounts directory
     let accounts_dir = get_accounts_dir(config_dir);
     fs::create_dir_all(&accounts_dir).context("Failed to create accounts directory")?;
-
-    // Copy auth file
     copy_auth_file(&codex_auth, &account_auth_path)?;
 
-    // Update config
     let mut config = load_config(config_dir)?;
     config.accounts.insert(
         name.to_string(),
@@ -275,12 +315,10 @@ fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
 
     println!("Added account '{}' successfully.", name);
     println!("Auth file saved to: {:?}", account_auth_path);
-
     Ok(())
 }
 
 fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result<()> {
-    // Check if Codex is running
     if is_codex_running() {
         warn_codex_running();
         if !force {
@@ -289,7 +327,6 @@ fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result<()>
     }
 
     let account_auth_path = get_account_auth_path(config_dir, name);
-
     if !account_auth_path.exists() {
         anyhow::bail!(
             "Account '{}' not found. Run 'codex-usage accounts list' to see available accounts.",
@@ -298,64 +335,496 @@ fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result<()>
     }
 
     let codex_auth = get_codex_auth_path();
-
-    // Backup current auth if exists
     if codex_auth.exists() {
         let backup_path = codex_auth.with_extension("json.backup");
         fs::copy(&codex_auth, &backup_path).ok();
     }
-
-    // Copy new auth
     copy_auth_file(&account_auth_path, &codex_auth)?;
 
-    // Update config
     let mut config = load_config(config_dir)?;
     config.active_account = Some(name.to_string());
-
     if let Some(account_info) = config.accounts.get_mut(name) {
         account_info.last_used = Some(chrono::Utc::now().to_rfc3339());
     }
-
     save_config(config_dir, &config)?;
 
     println!("Switched to account '{}' successfully.", name);
-
     Ok(())
 }
 
 fn cmd_accounts_remove(config_dir: &Path, name: &str) -> Result<()> {
     let account_auth_path = get_account_auth_path(config_dir, name);
-
     if !account_auth_path.exists() {
         anyhow::bail!("Account '{}' not found.", name);
     }
 
-    // Remove account files
     if let Some(parent) = account_auth_path.parent() {
         fs::remove_dir_all(parent).context("Failed to remove account directory")?;
     }
 
-    // Update config
     let mut config = load_config(config_dir)?;
     config.accounts.remove(name);
-
     if config.active_account.as_deref() == Some(name) {
         config.active_account = None;
     }
-
     save_config(config_dir, &config)?;
 
     println!("Removed account '{}' successfully.", name);
+    Ok(())
+}
+
+fn format_reset_time(seconds: u64) -> String {
+    let hours = seconds / 3600;
+    let remainder = seconds % 3600;
+    let minutes = remainder / 60;
+    if hours > 0 {
+        format!("{}h {}m", hours, minutes)
+    } else {
+        format!("{}m", minutes)
+    }
+}
+
+fn parse_usage_response(data: serde_json::Value, account_name: &str) -> UsageData {
+    let mut usage = UsageData {
+        account_name: account_name.to_string(),
+        status: "ok".to_string(),
+        plan: None,
+        primary_window: None,
+        secondary_window: None,
+        code_review: None,
+        limit_reached: false,
+        auth_type: "OAuth (ChatGPT)".to_string(),
+    };
+
+    if let Some(plan) = data.get("plan_type").and_then(|v| v.as_str()) {
+        usage.plan = Some(plan.to_string());
+    }
+
+    if let Some(rate_limit) = data.get("rate_limit") {
+        if let Some(primary) = rate_limit.get("primary_window") {
+            let window_seconds = primary
+                .get("limit_window_seconds")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(18000);
+            let window_hours = window_seconds / 3600;
+            let used_percent = primary
+                .get("used_percent")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let remaining_percent = 100.0 - used_percent;
+            let reset_secs = primary
+                .get("reset_after_seconds")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            usage.primary_window = Some(RateWindow {
+                used_percent,
+                remaining_percent,
+                window: format!("{}h", window_hours),
+                resets_in: if reset_secs > 0 {
+                    Some(format_reset_time(reset_secs))
+                } else {
+                    None
+                },
+            });
+        }
+
+        if let Some(secondary) = rate_limit.get("secondary_window") {
+            let window_seconds = secondary
+                .get("limit_window_seconds")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(604800);
+            let window_days = window_seconds / 86400;
+            let used_percent = secondary
+                .get("used_percent")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let remaining_percent = 100.0 - used_percent;
+            let reset_secs = secondary
+                .get("reset_after_seconds")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+
+            usage.secondary_window = Some(RateWindow {
+                used_percent,
+                remaining_percent,
+                window: format!("{}d", window_days),
+                resets_in: if reset_secs > 0 {
+                    Some(format_reset_time(reset_secs))
+                } else {
+                    None
+                },
+            });
+        }
+
+        if let Some(limit_reached) = rate_limit.get("limit_reached").and_then(|v| v.as_bool()) {
+            usage.limit_reached = limit_reached;
+        }
+    }
+
+    if let Some(review_limit) = data.get("code_review_rate_limit") {
+        if let Some(primary) = review_limit.get("primary_window") {
+            let used_percent = primary
+                .get("used_percent")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            usage.code_review = Some(CodeReview { used_percent });
+        }
+    }
+
+    usage
+}
+
+fn fetch_usage(access_token: &str, account_id: &str) -> Result<UsageData> {
+    let client = reqwest::blocking::Client::new();
+    let response = client
+        .get(USAGE_API_URL)
+        .header("Authorization", format!("Bearer {}", access_token))
+        .header("chatgpt-account-id", account_id)
+        .header("User-Agent", "codex-cli")
+        .header("Content-Type", "application/json")
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .context("Failed to fetch usage")?;
+
+    let status = response.status();
+    if !status.is_success() {
+        anyhow::bail!("API returned error: {}", status);
+    }
+
+    let data: serde_json::Value = response.json().context("Failed to parse response")?;
+    Ok(parse_usage_response(data, "current"))
+}
+
+fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
+    let cache_path = get_cache_path(config_dir);
+    if !cache_path.exists() {
+        return None;
+    }
+
+    let content = match fs::read_to_string(&cache_path) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    let cached: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    let timestamp = cached.get("timestamp")?.as_f64()?;
+    let data = cached.get("data")?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let elapsed = now - timestamp;
+    if elapsed > CACHE_TTL_SECS as f64 {
+        return None;
+    }
+
+    let account_name = data
+        .get("account_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+    let status = data
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("error")
+        .to_string();
+    let plan = data
+        .get("plan")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let limit_reached = data
+        .get("limit_reached")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let auth_type = data
+        .get("auth_type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    let primary_window = data.get("primary_window").and_then(|pw| {
+        Some(RateWindow {
+            used_percent: pw.get("used_percent")?.as_f64()?,
+            remaining_percent: pw.get("remaining_percent")?.as_f64()?,
+            window: pw.get("window")?.as_str()?.to_string(),
+            resets_in: pw
+                .get("resets_in")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        })
+    });
+
+    let secondary_window = data.get("secondary_window").and_then(|sw| {
+        Some(RateWindow {
+            used_percent: sw.get("used_percent")?.as_f64()?,
+            remaining_percent: sw.get("remaining_percent")?.as_f64()?,
+            window: sw.get("window")?.as_str()?.to_string(),
+            resets_in: sw
+                .get("resets_in")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+        })
+    });
+
+    let code_review = data.get("code_review").and_then(|cr| {
+        Some(CodeReview {
+            used_percent: cr.get("used_percent")?.as_f64()?,
+        })
+    });
+
+    Some(UsageData {
+        account_name,
+        status,
+        plan,
+        primary_window,
+        secondary_window,
+        code_review,
+        limit_reached,
+        auth_type,
+    })
+}
+
+fn save_cache(config_dir: &Path, usage: &UsageData) -> Result<()> {
+    let cache_path = get_cache_path(config_dir);
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let cache_data = serde_json::json!({
+        "timestamp": timestamp,
+        "data": usage
+    });
+    let content = serde_json::to_string_pretty(&cache_data).context("Failed to serialize cache")?;
+    fs::write(&cache_path, content).context("Failed to write cache")?;
+    Ok(())
+}
+
+fn get_status_icon(percent: f64) -> &'static str {
+    if percent >= 100.0 {
+        "❌"
+    } else if percent >= 90.0 {
+        "🔴"
+    } else if percent >= 70.0 {
+        "⚠️"
+    } else {
+        "✅"
+    }
+}
+
+fn cmd_status(
+    config_dir: &Path,
+    all: bool,
+    json: bool,
+    oneline: bool,
+    refresh: bool,
+) -> Result<()> {
+    let config = load_config(config_dir)?;
+
+    let accounts_to_check: Vec<String> = if all {
+        config.accounts.keys().cloned().collect()
+    } else {
+        vec![config
+            .active_account
+            .clone()
+            .unwrap_or_else(|| "default".to_string())]
+    };
+
+    if accounts_to_check.is_empty()
+        || (accounts_to_check.len() == 1 && accounts_to_check[0] == "default")
+    {
+        let codex_auth_path = get_codex_auth_path();
+        if codex_auth_path.exists() {
+            let auth = load_codex_auth(&codex_auth_path)?;
+            if let Some(auth) = auth {
+                if let Some(tokens) = auth.tokens {
+                    if let (Some(access_token), Some(account_id)) =
+                        (&tokens.access_token, &tokens.account_id)
+                    {
+                        if !refresh {
+                            if let Some(cached) = get_cached_usage(config_dir) {
+                                if json {
+                                    println!("{}", serde_json::to_string_pretty(&cached)?);
+                                } else if oneline {
+                                    print_oneline(&cached);
+                                } else {
+                                    print_usage(&cached);
+                                }
+                                return Ok(());
+                            }
+                        }
+
+                        match fetch_usage(access_token, account_id) {
+                            Ok(usage) => {
+                                let _ = save_cache(config_dir, &usage);
+                                if json {
+                                    println!("{}", serde_json::to_string_pretty(&usage)?);
+                                } else if oneline {
+                                    print_oneline(&usage);
+                                } else {
+                                    print_usage(&usage);
+                                }
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                anyhow::bail!("Failed to fetch usage: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        anyhow::bail!(
+            "No active account. Run 'codex login' or use 'codex-usage accounts add' first."
+        );
+    }
+
+    let mut all_usages: Vec<UsageData> = Vec::new();
+
+    for account_name in &accounts_to_check {
+        let account_auth_path = get_account_auth_path(config_dir, account_name);
+        let auth = load_codex_auth(&account_auth_path)?;
+
+        if let Some(auth) = auth {
+            if let Some(tokens) = auth.tokens {
+                if let (Some(access_token), Some(account_id)) =
+                    (&tokens.access_token, &tokens.account_id)
+                {
+                    if !refresh {
+                        if let Some(cached) = get_cached_usage(config_dir) {
+                            if cached.account_name == *account_name {
+                                all_usages.push(cached);
+                                continue;
+                            }
+                        }
+                    }
+
+                    match fetch_usage(access_token, account_id) {
+                        Ok(mut usage) => {
+                            usage.account_name = account_name.clone();
+                            let _ = save_cache(config_dir, &usage);
+                            all_usages.push(usage);
+                        }
+                        Err(e) => {
+                            eprintln!("Warning: Failed to fetch usage for {}: {}", account_name, e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if all_usages.is_empty() {
+        anyhow::bail!("No usage data available for any account.");
+    }
+
+    if json {
+        if all_usages.len() == 1 {
+            println!("{}", serde_json::to_string_pretty(&all_usages[0])?);
+        } else {
+            println!("{}", serde_json::to_string_pretty(&all_usages)?);
+        }
+    } else if oneline {
+        for usage in &all_usages {
+            print_oneline(usage);
+        }
+    } else {
+        for usage in &all_usages {
+            print_usage(usage);
+            println!();
+        }
+    }
 
     Ok(())
 }
 
+fn print_usage(usage: &UsageData) {
+    println!("{}", "=".repeat(50));
+    println!("  {}", usage.account_name);
+    println!("{}", "=".repeat(50));
+
+    println!("  🔑 Auth: {}", usage.auth_type);
+    if let Some(plan) = &usage.plan {
+        println!("  📊 Plan: {}", plan);
+    }
+
+    if usage.status == "ok" {
+        println!("  ✅ Connected");
+    } else {
+        println!("  ❌ Error: {}", usage.status);
+    }
+
+    if let Some(pw) = &usage.primary_window {
+        println!();
+        println!("  {} Window:", pw.window);
+        println!(
+            "    Used:      {:.1}% {}",
+            pw.used_percent,
+            get_status_icon(pw.used_percent)
+        );
+        println!("    Remaining: {:.1}%", pw.remaining_percent);
+        if let Some(reset) = &pw.resets_in {
+            println!("    Resets in: {}", reset);
+        }
+    }
+
+    if let Some(sw) = &usage.secondary_window {
+        println!();
+        println!("  {} Window:", sw.window);
+        println!(
+            "    Used:      {:.1}% {}",
+            sw.used_percent,
+            get_status_icon(sw.used_percent)
+        );
+        println!("    Remaining: {:.1}%", sw.remaining_percent);
+        if let Some(reset) = &sw.resets_in {
+            println!("    Resets in: {}", reset);
+        }
+    }
+
+    if let Some(cr) = &usage.code_review {
+        println!();
+        println!("  Code Review: {:.1}% used", cr.used_percent);
+    }
+
+    if usage.limit_reached {
+        println!();
+        println!("  ⚠️  Rate limit reached!");
+    }
+}
+
+fn print_oneline(usage: &UsageData) {
+    let mut parts = Vec::new();
+
+    if let Some(pw) = &usage.primary_window {
+        parts.push(format!(
+            "{:.0}% ({}) {}",
+            pw.used_percent,
+            pw.window,
+            get_status_icon(pw.used_percent)
+        ));
+    }
+
+    if let Some(sw) = &usage.secondary_window {
+        parts.push(format!("{:.0}% ({})", sw.used_percent, sw.window));
+    }
+
+    if parts.is_empty() {
+        println!("{}: No data", usage.account_name);
+    } else {
+        println!("{}: {}", usage.account_name, parts.join(" / "));
+    }
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
     let config_dir = cli.config_dir.unwrap_or_else(get_config_dir);
 
-    // Initialize logging
     tracing_subscriber::fmt()
         .with_max_level(if cli.verbose {
             tracing::Level::DEBUG
@@ -366,7 +835,6 @@ fn main() -> Result<()> {
 
     tracing::debug!("Config directory: {:?}", config_dir);
 
-    // Ensure config directory exists
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir)?;
         tracing::info!("Created config directory: {:?}", config_dir);
@@ -379,14 +847,7 @@ fn main() -> Result<()> {
             oneline,
             refresh,
         } => {
-            tracing::debug!(
-                "Status command: all={}, json={}, oneline={}, refresh={}",
-                all,
-                json,
-                oneline,
-                refresh
-            );
-            println!("codex-usage status - use --all to check all accounts");
+            cmd_status(&config_dir, all, json, oneline, refresh)?;
         }
         Commands::Accounts { command } => match command {
             AccountCommands::List => {
