@@ -156,50 +156,50 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  source:
-    name: Source Tarball
-    needs: []
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+  # source:
+  #   name: Source Tarball
+  #   needs: []
+  #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      - name: Create source tarball
-        run: bash scripts/build-source.sh "${{ github.ref_name }}"
+  #     - name: Create source tarball
+  #       run: bash scripts/build-source.sh "${{ github.ref_name }}"
 
-      - name: Upload Source
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: release/*.tar.gz
-          draft: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #     - name: Upload Source
+  #       uses: softprops/action-gh-release@v1
+  #       with:
+  #         tag_name: ${{ github.ref_name }}
+  #         files: release/*.tar.gz
+  #         draft: true
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  homebrew:
-    name: Homebrew
-    needs: []
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  # homebrew:
+  #   name: Homebrew
+  #   needs: release
+  #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      - name: Create Homebrew formula PR
-        uses: peter-evans/create-pull-request@v6
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          commit-message: "Update codex-usage to ${{ github.ref_name }}"
-          title: "Update codex-usage to ${{ github.ref_name }}"
-          body: |
-            Automated PR to update Homebrew formula for release ${{ github.ref_name }}.
-            
-            Note: SHA256 hashes need to be updated before merging.
-            Run `brew audit --strict Formula/codex-usage.rb` to verify.
-          branch: homebrew-update
-          base: main
-          repository: Liam-Deacon/homebrew-tap
-          path: Formula/codex-usage.rb
-          add-paths: Formula/codex-usage.rb
+  #     - name: Create Homebrew formula PR
+  #       uses: peter-evans/create-pull-request@v6
+  #       with:
+  #         token: ${{ secrets.GITHUB_TOKEN }}
+  #         commit-message: "Update codex-usage to ${{ github.ref_name }}"
+  #         title: "Update codex-usage to ${{ github.ref_name }}"
+  #         body: |
+  #           Automated PR to update Homebrew formula for release ${{ github.ref_name }}.
+  #           
+  #           Note: SHA256 hashes need to be updated before merging.
+  #           Run `brew audit --strict Formula/codex-usage.rb` to verify.
+  #         branch: homebrew-update
+  #         base: main
+  #         repository: Liam-Deacon/homebrew-tap
+  #         path: Formula/codex-usage.rb
+  #         add-paths: Formula/codex-usage.rb
