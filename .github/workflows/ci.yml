@@ -78,7 +78,7 @@ jobs:
         include:
           - platform: macos-x64
             target: x86_64-apple-darwin
-            runs-on: macos-13
+            runs-on: macos-14
             binary_name: codex-usage-x86_64-apple-darwin
           - platform: macos-arm64
             target: aarch64-apple-darwin
@@ -92,6 +92,7 @@ jobs:
             target: aarch64-unknown-linux-gnu
             runs-on: ubuntu-latest
             binary_name: codex-usage-aarch64-unknown-linux-gnu
+            cross: true
           - platform: windows-x64
             target: x86_64-pc-windows-msvc
             runs-on: windows-latest
@@ -100,6 +101,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.cross
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
