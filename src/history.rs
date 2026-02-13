@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(unused_variables)]
+
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection};
