@@ -18,9 +18,15 @@ pub fn install_schedule(schedule: &WakeupSchedule) -> Result<()> {
     for time_str in &times_str {
         let parts: Vec<&str> = time_str.split(':').collect();
         if parts.len() >= 2 {
-            let minute = parts[0];
-            let hour = parts[1];
-            let entry = format!("{} {} * * 1-5 codex-usage {}", minute, hour, args.join(" "));
+            let minute = parts[1];
+            let hour = parts[0];
+            let entry = format!(
+                "{} {} * * 1-5 codex-usage {} # {}",
+                minute,
+                hour,
+                args.join(" "),
+                CRON_TASK_NAME
+            );
             cron_entries.push(entry);
         }
     }
@@ -99,13 +105,22 @@ fn get_current_crontab() -> Result<String> {
 }
 
 fn set_crontab(content: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+
     let mut cmd = Command::new("crontab");
     cmd.arg("-");
+    cmd.stdin(Stdio::piped());
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
 
-    let output = cmd
-        .input(content.as_bytes())
-        .output()
-        .context("Failed to set crontab")?;
+    let mut child = cmd.spawn().context("Failed to spawn crontab process")?;
+
+    if let Some(ref mut stdin) = child.stdin {
+        stdin.write_all(content.as_bytes())?;
+    }
+
+    let output = child.wait_with_output().context("Failed to set crontab")?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

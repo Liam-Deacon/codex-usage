@@ -56,15 +56,15 @@ enum Commands {
     /// Wakeup/schedule command for scheduled cycling
     Wakeup {
         /// Install the wakeup schedule to system scheduler
-        #[arg(long)]
+        #[arg(long, group = "wakeup_action")]
         install: bool,
 
         /// Remove the wakeup schedule from system scheduler
-        #[arg(long)]
+        #[arg(long, group = "wakeup_action")]
         remove: bool,
 
         /// List current wakeup schedules
-        #[arg(long)]
+        #[arg(long, group = "wakeup_action")]
         list: bool,
 
         /// Time to trigger (repeatable, e.g., 08:00, 14:00)
@@ -88,7 +88,7 @@ enum Commands {
         wake_system: bool,
 
         /// Run wakeup now (used by scheduler)
-        #[arg(long)]
+        #[arg(long, group = "wakeup_action")]
         run: bool,
     },
 
@@ -1290,8 +1290,8 @@ fn cmd_wakeup_install(
     wake_system: bool,
 ) -> Result<()> {
     use crate::schedule::{
-        create_schedule, load_wakeup_config, parse_duration, parse_time, platform,
-        save_wakeup_config,
+        create_schedule, load_wakeup_config_with_dir, parse_duration, parse_time, platform,
+        save_wakeup_config_with_dir,
     };
 
     if times.is_empty() {
@@ -1318,21 +1318,21 @@ fn cmd_wakeup_install(
 
     platform::install(&schedule)?;
 
-    let mut config = load_wakeup_config()?;
+    let mut config = load_wakeup_config_with_dir(config_dir)?;
     config.add_schedule(schedule);
-    save_wakeup_config(&config)?;
+    save_wakeup_config_with_dir(config_dir, &config)?;
 
     Ok(())
 }
 
-fn cmd_wakeup_remove() -> Result<()> {
-    use crate::schedule::{load_wakeup_config, platform, save_wakeup_config};
+fn cmd_wakeup_remove(config_dir: &Path) -> Result<()> {
+    use crate::schedule::{load_wakeup_config_with_dir, platform, save_wakeup_config_with_dir};
 
     platform::remove()?;
 
-    let mut config = load_wakeup_config()?;
+    let mut config = load_wakeup_config_with_dir(config_dir)?;
     config.remove_schedule("default");
-    save_wakeup_config(&config)?;
+    save_wakeup_config_with_dir(config_dir, &config)?;
 
     Ok(())
 }
@@ -1429,7 +1429,7 @@ fn main() -> Result<()> {
             } else if list {
                 cmd_wakeup_list()?;
             } else if remove {
-                cmd_wakeup_remove()?;
+                cmd_wakeup_remove(&config_dir)?;
             } else if install {
                 cmd_wakeup_install(
                     &config_dir,
@@ -1439,7 +1439,7 @@ fn main() -> Result<()> {
                     wake_system,
                 )?;
             } else {
-                println!("codex-usage wakeup - use --install, --remove, --list, or --run");
+                anyhow::bail!("Must specify one of --install, --remove, --list, or --run");
             }
         }
         Commands::Cycle { command } => match command {
