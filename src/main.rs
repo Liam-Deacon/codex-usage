@@ -6,6 +6,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod schedule;
+
 #[derive(Parser)]
 #[command(name = "codex-usage")]
 #[command(about = "Track OpenAI Codex usage with multi-account support", long_about = None)]
@@ -51,23 +53,43 @@ enum Commands {
         command: AccountCommands,
     },
 
-    /// Wakeup Codex to utilize limits
+    /// Wakeup/schedule command for scheduled cycling
     Wakeup {
-        /// Wakeup all accounts
-        #[arg(short, long)]
-        all: bool,
-
-        /// Configure wakeup schedule
-        #[arg(long)]
-        config: bool,
-
-        /// Install to system scheduler
+        /// Install the wakeup schedule to system scheduler
         #[arg(long)]
         install: bool,
 
-        /// Uninstall from system scheduler
+        /// Remove the wakeup schedule from system scheduler
         #[arg(long)]
-        uninstall: bool,
+        remove: bool,
+
+        /// List current wakeup schedules
+        #[arg(long)]
+        list: bool,
+
+        /// Time to trigger (repeatable, e.g., 08:00, 14:00)
+        #[arg(long, value_name = "TIME")]
+        at: Vec<String>,
+
+        /// Run periodically after --at times (e.g., 1h, 30m)
+        #[arg(long, value_name = "DURATION")]
+        interval: Option<String>,
+
+        /// Specific account to wake (default: all with cycling)
+        #[arg(long, value_name = "NAME")]
+        account: Option<String>,
+
+        /// Force wake even if Codex is running
+        #[arg(long)]
+        force: bool,
+
+        /// Attempt to wake system from sleep (macOS: pmset)
+        #[arg(long)]
+        wake_system: bool,
+
+        /// Run wakeup now (used by scheduler)
+        #[arg(long)]
+        run: bool,
     },
 
     /// Cycle through accounts when limits exhausted
@@ -1260,6 +1282,95 @@ fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+fn cmd_wakeup_install(
+    config_dir: &Path,
+    times: &[String],
+    interval: Option<&str>,
+    account: Option<&str>,
+    wake_system: bool,
+) -> Result<()> {
+    use crate::schedule::{
+        create_schedule, load_wakeup_config, parse_duration, parse_time, platform,
+        save_wakeup_config,
+    };
+
+    if times.is_empty() {
+        anyhow::bail!("At least one --at time must be specified");
+    }
+
+    let parsed_times: Result<Vec<chrono::NaiveTime>, _> =
+        times.iter().map(|t| parse_time(t)).collect();
+    let times = parsed_times.context("Failed to parse times")?;
+
+    let interval_duration = if let Some(i) = interval {
+        Some(parse_duration(i).context("Failed to parse interval")?)
+    } else {
+        None
+    };
+
+    let schedule = create_schedule(
+        "default",
+        times,
+        interval_duration,
+        account.map(String::from),
+        wake_system,
+    )?;
+
+    platform::install(&schedule)?;
+
+    let mut config = load_wakeup_config()?;
+    config.add_schedule(schedule);
+    save_wakeup_config(&config)?;
+
+    Ok(())
+}
+
+fn cmd_wakeup_remove() -> Result<()> {
+    use crate::schedule::{load_wakeup_config, platform, save_wakeup_config};
+
+    platform::remove()?;
+
+    let mut config = load_wakeup_config()?;
+    config.remove_schedule("default");
+    save_wakeup_config(&config)?;
+
+    Ok(())
+}
+
+fn cmd_wakeup_list() -> Result<()> {
+    use crate::schedule::platform;
+
+    let schedules = platform::list()?;
+
+    if schedules.is_empty() {
+        println!("No wakeup schedules configured.");
+    } else {
+        println!("Wakeup schedules:");
+        for schedule in &schedules {
+            println!("  - {}", schedule);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_wakeup_run(config_dir: &Path, account: Option<&str>, force: bool) -> Result<()> {
+    if is_codex_running() && !force {
+        warn_codex_running();
+        anyhow::bail!("Aborted. Use --force to run wakeup anyway.");
+    }
+
+    if let Some(account_name) = account {
+        println!("Waking specific account: {}", account_name);
+        cmd_accounts_switch(config_dir, account_name, force)?;
+    } else {
+        println!("Running wakeup cycle...");
+        cmd_cycle_now(config_dir, force)?;
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_dir = cli.config_dir.unwrap_or_else(get_config_dir);
@@ -1303,19 +1414,33 @@ fn main() -> Result<()> {
             }
         },
         Commands::Wakeup {
-            all,
-            config,
             install,
-            uninstall,
+            remove,
+            list,
+            at,
+            interval,
+            account,
+            force,
+            wake_system,
+            run,
         } => {
-            tracing::debug!(
-                "Wakeup command: all={}, config={}, install={}, uninstall={}",
-                all,
-                config,
-                install,
-                uninstall
-            );
-            println!("codex-usage wakeup - use --all to wakeup all accounts");
+            if run {
+                cmd_wakeup_run(&config_dir, account.as_deref(), force)?;
+            } else if list {
+                cmd_wakeup_list()?;
+            } else if remove {
+                cmd_wakeup_remove()?;
+            } else if install {
+                cmd_wakeup_install(
+                    &config_dir,
+                    &at,
+                    interval.as_deref(),
+                    account.as_deref(),
+                    wake_system,
+                )?;
+            } else {
+                println!("codex-usage wakeup - use --install, --remove, --list, or --run");
+            }
         }
         Commands::Cycle { command } => match command {
             CycleCommands::Status => {
