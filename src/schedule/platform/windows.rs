@@ -118,12 +118,10 @@ pub fn list_schedules() -> Result<Vec<String>> {
         stdout
             .lines()
             .filter(|line| line.contains(TASK_NAME))
-            .filter_map(|s| {
-                if let Some((_, name)) = s.split_once(':') {
-                    Some(name.trim().to_string())
-                } else {
-                    Some(s.trim().to_string())
-                }
+            .map(|s| {
+                s.split_once(':')
+                    .map(|(_, name)| name.trim().to_string())
+                    .unwrap_or_else(|| s.trim().to_string())
             })
             .collect()
     } else {
