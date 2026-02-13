@@ -2010,8 +2010,8 @@ fn main() -> Result<()> {
                 },
                 HistoryCommands::Show {
                     period: _,
-                    from,
-                    to,
+                    from: _,
+                    to: _,
                     account,
                 } => {
                     let account_name = account.unwrap_or_else(|| "default".to_string());

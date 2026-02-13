@@ -72,6 +72,7 @@ impl HistoryDatabase {
         })
     }
 
+    #[allow(dead_code)]
     pub fn insert_snapshot(&self, snapshot: &UsageSnapshot) -> Result<i64> {
         let conn = self.conn.lock().unwrap();
         conn.execute(
@@ -101,10 +102,13 @@ impl HistoryDatabase {
         let conn = self.conn.lock().unwrap();
         let mut sql = String::from("SELECT id, account_name, timestamp, five_hour_percent, weekly_percent, weekly_reset_timestamp, five_hour_reset_timestamp, plan, status FROM usage_snapshots WHERE account_name = ?1");
 
-        if from_timestamp.is_some() {
+        let from_param = from_timestamp.as_ref();
+        let to_param = to_timestamp.as_ref();
+
+        if from_param.is_some() {
             sql.push_str(" AND timestamp >= ?2");
         }
-        if to_timestamp.is_some() {
+        if to_param.is_some() {
             sql.push_str(" AND timestamp <= ?3");
         }
         sql.push_str(" ORDER BY timestamp DESC");
@@ -117,10 +121,9 @@ impl HistoryDatabase {
 
         let mut snapshots = Vec::new();
 
-        if from_timestamp.is_some() && to_timestamp.is_some() {
-            let rows = stmt.query_map(
-                params![account_name, from_timestamp.unwrap(), to_timestamp.unwrap()],
-                |row| {
+        match (from_param, to_param) {
+            (Some(from), Some(to)) => {
+                let rows = stmt.query_map(params![account_name, from, to], |row| {
                     Ok(UsageSnapshot {
                         id: Some(row.get(0)?),
                         account_name: row.get(1)?,
@@ -132,44 +135,64 @@ impl HistoryDatabase {
                         plan: row.get(7)?,
                         status: row.get(8)?,
                     })
-                },
-            )?;
-            for row in rows {
-                snapshots.push(row?);
+                })?;
+                for row in rows {
+                    snapshots.push(row?);
+                }
             }
-        } else if from_timestamp.is_some() {
-            let rows = stmt.query_map(params![account_name, from_timestamp.unwrap()], |row| {
-                Ok(UsageSnapshot {
-                    id: Some(row.get(0)?),
-                    account_name: row.get(1)?,
-                    timestamp: row.get(2)?,
-                    five_hour_percent: row.get(3)?,
-                    weekly_percent: row.get(4)?,
-                    weekly_reset_timestamp: row.get(5)?,
-                    five_hour_reset_timestamp: row.get(6)?,
-                    plan: row.get(7)?,
-                    status: row.get(8)?,
-                })
-            })?;
-            for row in rows {
-                snapshots.push(row?);
+            (Some(from), None) => {
+                let rows = stmt.query_map(params![account_name, from], |row| {
+                    Ok(UsageSnapshot {
+                        id: Some(row.get(0)?),
+                        account_name: row.get(1)?,
+                        timestamp: row.get(2)?,
+                        five_hour_percent: row.get(3)?,
+                        weekly_percent: row.get(4)?,
+                        weekly_reset_timestamp: row.get(5)?,
+                        five_hour_reset_timestamp: row.get(6)?,
+                        plan: row.get(7)?,
+                        status: row.get(8)?,
+                    })
+                })?;
+                for row in rows {
+                    snapshots.push(row?);
+                }
             }
-        } else {
-            let rows = stmt.query_map(params![account_name], |row| {
-                Ok(UsageSnapshot {
-                    id: Some(row.get(0)?),
-                    account_name: row.get(1)?,
-                    timestamp: row.get(2)?,
-                    five_hour_percent: row.get(3)?,
-                    weekly_percent: row.get(4)?,
-                    weekly_reset_timestamp: row.get(5)?,
-                    five_hour_reset_timestamp: row.get(6)?,
-                    plan: row.get(7)?,
-                    status: row.get(8)?,
-                })
-            })?;
-            for row in rows {
-                snapshots.push(row?);
+            (None, Some(_to)) => {
+                let rows = stmt.query_map(params![account_name], |row| {
+                    Ok(UsageSnapshot {
+                        id: Some(row.get(0)?),
+                        account_name: row.get(1)?,
+                        timestamp: row.get(2)?,
+                        five_hour_percent: row.get(3)?,
+                        weekly_percent: row.get(4)?,
+                        weekly_reset_timestamp: row.get(5)?,
+                        five_hour_reset_timestamp: row.get(6)?,
+                        plan: row.get(7)?,
+                        status: row.get(8)?,
+                    })
+                })?;
+                for row in rows {
+                    snapshots.push(row?);
+                }
+            }
+            (None, None) => {
+                let rows = stmt.query_map(params![account_name], |row| {
+                    Ok(UsageSnapshot {
+                        id: Some(row.get(0)?),
+                        account_name: row.get(1)?,
+                        timestamp: row.get(2)?,
+                        five_hour_percent: row.get(3)?,
+                        weekly_percent: row.get(4)?,
+                        weekly_reset_timestamp: row.get(5)?,
+                        five_hour_reset_timestamp: row.get(6)?,
+                        plan: row.get(7)?,
+                        status: row.get(8)?,
+                    })
+                })?;
+                for row in rows {
+                    snapshots.push(row?);
+                }
             }
         }
 
@@ -214,6 +237,7 @@ impl HistoryDatabase {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn update_last_notified(&self, account_name: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let now = Utc::now().timestamp();
@@ -224,6 +248,7 @@ impl HistoryDatabase {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_all_notification_configs(&self) -> Result<Vec<NotificationConfig>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
@@ -261,6 +286,7 @@ impl HistoryDatabase {
     }
 }
 
+#[allow(dead_code)]
 pub fn get_history_db_path(config_dir: &Path) -> std::path::PathBuf {
     config_dir.join("history.db")
 }

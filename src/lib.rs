@@ -1566,9 +1566,9 @@ pub fn run_cli() -> Result<()> {
                     }
                 },
                 HistoryCommands::Show {
-                    period,
-                    from,
-                    to,
+                    period: _,
+                    from: _,
+                    to: _,
                     account,
                 } => {
                     let account_name = account.unwrap_or_else(|| "default".to_string());
@@ -1598,7 +1598,7 @@ pub fn run_cli() -> Result<()> {
                         println!();
                     }
                 }
-                HistoryCommands::Chart { accounts } => {
+                HistoryCommands::Chart { accounts: _ } => {
                     println!("Terminal chart visualization");
                     println!("This feature requires ratatui integration.");
                     let all_accounts = db.get_accounts()?;
@@ -1642,7 +1642,7 @@ pub fn run_cli() -> Result<()> {
                     }
                 }
                 HistoryCommands::Notify {
-                    enable,
+                    enable: _,
                     disable,
                     hours_before,
                     status,
@@ -1693,7 +1693,7 @@ pub fn run_cli() -> Result<()> {
                 }
                 HistoryCommands::Export {
                     output,
-                    format,
+                    format: _,
                     period,
                     from,
                     to,
