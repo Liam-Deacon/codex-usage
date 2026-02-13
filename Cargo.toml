@@ -36,9 +36,11 @@ hex = "0.4"
 ctrlc = "3.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 ratatui = "0.28"
-notify-rust = "4.11"
-daemonize = "0.5"
 pyo3 = { version = "0.20", optional = true, features = ["extension-module"] }
+
+[target.'cfg(unix)'.dependencies]
+daemonize = "0.5"
+notify-rust = "4.11"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1.7"
