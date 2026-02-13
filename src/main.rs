@@ -53,21 +53,8 @@ enum Commands {
 
     /// Wakeup Codex to utilize limits
     Wakeup {
-        /// Wakeup all accounts
-        #[arg(short, long)]
-        all: bool,
-
-        /// Configure wakeup schedule
-        #[arg(long)]
-        config: bool,
-
-        /// Install to system scheduler
-        #[arg(long)]
-        install: bool,
-
-        /// Uninstall from system scheduler
-        #[arg(long)]
-        uninstall: bool,
+        #[command(subcommand)]
+        command: WakeupCommands,
     },
 
     /// Cycle through accounts when limits exhausted
@@ -165,6 +152,51 @@ enum ScheduleCommands {
 
     /// Disable scheduled cycling
     Disable,
+}
+
+#[derive(Subcommand)]
+enum WakeupCommands {
+    /// Wakeup active account
+    Run {
+        /// Wakeup all accounts (sequential)
+        #[arg(short, long)]
+        all: bool,
+
+        /// Prompt to use for wakeup
+        #[arg(long, default_value = "hi")]
+        prompt: String,
+
+        /// Don't wait for completion
+        #[arg(long)]
+        background: bool,
+    },
+
+    /// Configure wakeup settings
+    Config {
+        /// Prompt to use for wakeup
+        #[arg(long)]
+        prompt: Option<String>,
+
+        /// Timeout in seconds
+        #[arg(long)]
+        timeout: Option<u32>,
+    },
+
+    /// Install wakeup to system scheduler
+    Install {
+        /// Interval in minutes
+        #[arg(long, default_value = "60")]
+        interval: u32,
+    },
+
+    /// Uninstall wakeup from system scheduler
+    Uninstall,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct WakeupConfig {
+    prompt: String,
+    timeout: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -1260,6 +1292,181 @@ fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+fn get_wakeup_config_path(config_dir: &Path) -> PathBuf {
+    config_dir.join("wakeup.json")
+}
+
+fn load_wakeup_config(config_dir: &Path) -> Result<WakeupConfig> {
+    let path = get_wakeup_config_path(config_dir);
+    if path.exists() {
+        let content = fs::read_to_string(&path)?;
+        let config: WakeupConfig =
+            serde_json::from_str(&content).context("Failed to parse wakeup config")?;
+        Ok(config)
+    } else {
+        Ok(WakeupConfig::default())
+    }
+}
+
+fn save_wakeup_config(config_dir: &Path, config: &WakeupConfig) -> Result<()> {
+    let path = get_wakeup_config_path(config_dir);
+    let content =
+        serde_json::to_string_pretty(config).context("Failed to serialize wakeup config")?;
+    fs::write(&path, content).context("Failed to write wakeup config")?;
+    Ok(())
+}
+
+fn wakeup_account(prompt: &str, _timeout_secs: u32) -> Result<()> {
+    println!("Waking up Codex with prompt: \"{}\"", prompt);
+
+    let output = Command::new("codex")
+        .arg("--non-interactive")
+        .arg(prompt)
+        .output()
+        .context("Failed to run codex command")?;
+
+    if output.status.success() {
+        println!("Wakeup completed successfully.");
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("rate limit") || stderr.contains("usage limit") {
+            println!("Wakeup hit rate limit (this is expected).");
+        } else {
+            eprintln!("Wakeup command failed: {}", stderr);
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_wakeup_run(config_dir: &Path, all: bool, prompt: String, _background: bool) -> Result<()> {
+    let config = load_config(config_dir)?;
+    let wakeup_config = load_wakeup_config(config_dir)?;
+
+    let effective_prompt = if prompt != "hi" {
+        prompt
+    } else {
+        wakeup_config.prompt.clone()
+    };
+
+    let accounts: Vec<String> = if all {
+        if config.accounts.is_empty() {
+            anyhow::bail!("No accounts configured. Add accounts first.");
+        }
+        config.accounts.keys().cloned().collect()
+    } else {
+        vec![config
+            .active_account
+            .clone()
+            .unwrap_or_else(|| "default".to_string())]
+    };
+
+    if accounts.is_empty() || (accounts.len() == 1 && accounts[0] == "default") {
+        // Wakeup current account
+        wakeup_account(&effective_prompt, wakeup_config.timeout)?;
+        return Ok(());
+    }
+
+    for (i, account) in accounts.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        println!("=== Waking up account: {} ===", account);
+
+        // Switch to account
+        let account_auth_path = get_account_auth_path(config_dir, account);
+        if account_auth_path.exists() {
+            let codex_auth = get_codex_auth_path();
+            if codex_auth.exists() {
+                let backup_path = codex_auth.with_extension("json.backup");
+                fs::copy(&codex_auth, &backup_path).ok();
+            }
+            copy_auth_file(&account_auth_path, &codex_auth)?;
+        }
+
+        // Wakeup
+        wakeup_account(&effective_prompt, wakeup_config.timeout)?;
+    }
+
+    Ok(())
+}
+
+fn cmd_wakeup_config(
+    config_dir: &Path,
+    prompt: Option<String>,
+    timeout: Option<u32>,
+) -> Result<()> {
+    let mut wakeup_config = load_wakeup_config(config_dir)?;
+
+    if let Some(p) = prompt {
+        wakeup_config.prompt = p;
+    }
+    if let Some(t) = timeout {
+        wakeup_config.timeout = t;
+    }
+
+    save_wakeup_config(config_dir, &wakeup_config)?;
+
+    println!("Wakeup configuration updated:");
+    println!("  Prompt:  {}", wakeup_config.prompt);
+    println!("  Timeout: {} seconds", wakeup_config.timeout);
+
+    Ok(())
+}
+
+fn cmd_wakeup_install(config_dir: &Path, interval: u32) -> Result<()> {
+    let wakeup_config = load_wakeup_config(config_dir)?;
+
+    println!("Installing wakeup schedule (every {} minutes)...", interval);
+
+    #[cfg(unix)]
+    {
+        let cron_entry = format!(
+            "*/{} * * * * {} codex --non-interactive \"{}\"",
+            interval,
+            std::env::current_exe()?.display(),
+            wakeup_config.prompt
+        );
+
+        println!("Add this to your crontab:");
+        println!("  {}", cron_entry);
+        println!();
+        println!("Or run: crontab -e and add the line above.");
+    }
+
+    #[cfg(windows)]
+    {
+        println!("On Windows, use Task Scheduler:");
+        println!("  1. Open Task Scheduler");
+        println!("  2. Create Basic Task");
+        println!("  3. Set trigger to every {} minutes", interval);
+        println!(
+            "  4. Set action to: {} --non-interactive \"{}\"",
+            std::env::current_exe()?.display(),
+            wakeup_config.prompt
+        );
+    }
+
+    Ok(())
+}
+
+fn cmd_wakeup_uninstall() -> Result<()> {
+    println!("Uninstalling wakeup schedule...");
+
+    #[cfg(unix)]
+    {
+        println!("Remove the cron entry added during installation:");
+        println!("  crontab -e");
+    }
+
+    #[cfg(windows)]
+    {
+        println!("Remove the scheduled task from Task Scheduler.");
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_dir = cli.config_dir.unwrap_or_else(get_config_dir);
@@ -1302,21 +1509,24 @@ fn main() -> Result<()> {
                 cmd_accounts_remove(&config_dir, &name)?;
             }
         },
-        Commands::Wakeup {
-            all,
-            config,
-            install,
-            uninstall,
-        } => {
-            tracing::debug!(
-                "Wakeup command: all={}, config={}, install={}, uninstall={}",
+        Commands::Wakeup { command } => match command {
+            WakeupCommands::Run {
                 all,
-                config,
-                install,
-                uninstall
-            );
-            println!("codex-usage wakeup - use --all to wakeup all accounts");
-        }
+                prompt,
+                background,
+            } => {
+                cmd_wakeup_run(&config_dir, all, prompt, background)?;
+            }
+            WakeupCommands::Config { prompt, timeout } => {
+                cmd_wakeup_config(&config_dir, prompt, timeout)?;
+            }
+            WakeupCommands::Install { interval } => {
+                cmd_wakeup_install(&config_dir, interval)?;
+            }
+            WakeupCommands::Uninstall => {
+                cmd_wakeup_uninstall()?;
+            }
+        },
         Commands::Cycle { command } => match command {
             CycleCommands::Status => {
                 cmd_cycle_status(&config_dir)?;
