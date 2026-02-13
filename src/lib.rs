@@ -1096,7 +1096,7 @@ fn should_cycle(usage: &UsageData, config: &CycleConfig) -> (bool, String) {
 
     let reason = if config.mode == "and" {
         if five_hour_trigger && weekly_trigger {
-            let parts = vec![
+            let parts = [
                 format!("5h: {:.0}% remaining", five_hour_remaining),
                 format!("weekly: {:.0}% remaining", weekly_remaining),
             ];
