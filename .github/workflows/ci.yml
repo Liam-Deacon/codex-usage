@@ -79,26 +79,10 @@ jobs:
           - platform: linux-x64
             target: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
-          - platform: linux-arm64
-            target: aarch64-unknown-linux-gnu
-            runs-on: ubuntu-latest
-          - platform: macos-x64
-            target: x86_64-apple-darwin
-            runs-on: macos-latest
-          - platform: macos-arm64
-            target: aarch64-apple-darwin
-            runs-on: macos-latest
-          - platform: windows-x64
-            target: x86_64-pc-windows-msvc
-            runs-on: windows-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        if: matrix.platform == 'linux-arm64'
-        uses: docker/setup-qemu-action@v3
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
@@ -110,21 +94,12 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package
-        shell: bash
         run: |
           mkdir -p release
-          if [[ "${{ matrix.platform }}" == windows* ]]; then
-            cp target/${{ matrix.target }}/release/codex-usage.exe ./release/codex-usage.exe
-          elif [[ "${{ matrix.platform }}" == linux* ]] || [[ "${{ matrix.platform }}" == macos* ]]; then
-            mkdir -p "codex-usage-{{ matrix.platform }}"
-            cp target/${{ matrix.target }}/release/codex-usage "./codex-usage-{{ matrix.platform }}/codex-usage"
-            chmod +x "./codex-usage-{{ matrix.platform }}/codex-usage"
-            tar -czvf "release/codex-usage-{{ matrix.platform }}.tar.gz" "codex-usage-{{ matrix.platform }}"
-            rm -rf "codex-usage-{{ matrix.platform }}"
-          else
-            cp target/${{ matrix.target }}/release/codex-usage ./release/codex-usage
-            chmod +x ./release/codex-usage
-          fi
+          mkdir -p "codex-usage-${{ matrix.platform }}"
+          cp "target/${{ matrix.target }}/release/codex-usage" "./codex-usage-${{ matrix.platform }}/codex-usage"
+          chmod +x "./codex-usage-${{ matrix.platform }}/codex-usage"
+          tar -czvf "release/codex-usage-${{ matrix.platform }}.tar.gz" "codex-usage-${{ matrix.platform }}"
 
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
@@ -137,7 +112,7 @@ jobs:
 
   packages:
     name: Packages (RPM/DEB)
-    needs: []
+    needs: release
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     strategy:
@@ -147,19 +122,10 @@ jobs:
           - arch: amd64
             target: x86_64-unknown-linux-gnu
             rust_arch: x86_64
-          - arch: arm64
-            target: aarch64-unknown-linux-gnu
-            rust_arch: aarch64
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Set up QEMU
-        if: matrix.arch == 'arm64'
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm64
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@master
