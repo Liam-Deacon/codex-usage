@@ -233,7 +233,7 @@ jobs:
   #         title: "Update codex-usage to ${{ github.ref_name }}"
   #         body: |
   #           Automated PR to update Homebrew formula for release ${{ github.ref_name }}.
-  #           
+  #
   #           Note: SHA256 hashes need to be updated before merging.
   #           Run `brew audit --strict Formula/codex-usage.rb` to verify.
   #         branch: homebrew-update
