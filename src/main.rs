@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "codex-usage")]
@@ -1275,6 +1277,8 @@ fn parse_interval(s: &str) -> Result<std::time::Duration> {
     } else if let Some(stripped) = s.strip_suffix('h') {
         let val = stripped.parse::<u64>()?;
         Ok(std::time::Duration::from_secs(val * 3600))
+    } else if let Ok(val) = s.parse::<u64>() {
+        Ok(std::time::Duration::from_secs(val))
     } else {
         anyhow::bail!(
             "Invalid interval format: {}. Use format like '10s', '30s', '1m', '1h'",
@@ -1370,6 +1374,46 @@ fn format_uptime(duration: std::time::Duration) -> String {
     }
 }
 
+fn process_account_usage(
+    account_name: &str,
+    access_token: &str,
+    account_id: &str,
+    samples_map: &mut HashMap<String, VecDeque<UsageSample>>,
+) -> Result<()> {
+    let usage = fetch_usage(access_token, account_id)?;
+
+    let primary_used = usage
+        .primary_window
+        .as_ref()
+        .map(|w| w.used_percent)
+        .unwrap_or(0.0);
+    let secondary_used = usage
+        .secondary_window
+        .as_ref()
+        .map(|w| w.used_percent)
+        .unwrap_or(0.0);
+    let code_review_used = usage
+        .code_review
+        .as_ref()
+        .map(|w| w.used_percent)
+        .unwrap_or(0.0);
+
+    let samples = samples_map.entry(account_name.to_string()).or_default();
+    samples.push_back(UsageSample {
+        timestamp: std::time::Instant::now(),
+        primary_used,
+        secondary_used,
+        code_review_used,
+    });
+
+    while samples.len() > 30 {
+        samples.pop_front();
+    }
+
+    print_watch_usage(&usage, samples.make_contiguous());
+    Ok(())
+}
+
 fn cmd_status_watch(
     config_dir: &Path,
     interval_str: &str,
@@ -1378,20 +1422,19 @@ fn cmd_status_watch(
 ) -> Result<()> {
     let interval = parse_interval(interval_str)?;
     let start_time = std::time::Instant::now();
-    let mut samples: Vec<UsageSample> = Vec::new();
-    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mut samples_map: HashMap<String, VecDeque<UsageSample>> = HashMap::new();
+    let running = Arc::new(AtomicBool::new(true));
     let running_clone = running.clone();
 
     ctrlc::set_handler(move || {
-        running_clone.store(false, std::sync::atomic::Ordering::SeqCst);
-    })
-    .expect("Error setting Ctrl-C handler");
+        running_clone.store(false, Ordering::SeqCst);
+    })?;
 
     println!("Watching usage (Ctrl+C to stop)...");
     println!();
 
     loop {
-        if !running.load(std::sync::atomic::Ordering::SeqCst) {
+        if !running.load(Ordering::SeqCst) {
             println!("\nStopped.");
             break;
         }
@@ -1410,10 +1453,11 @@ fn cmd_status_watch(
         let now = chrono::Local::now();
         println!("\x1B[2J\x1B[1H");
         println!("Last updated: {}", now.format("%Y-%m-%d %H:%M:%S"));
+        let total_samples: usize = samples_map.values().map(VecDeque::len).sum();
         println!(
             "Uptime: {} | Samples: {}",
             format_uptime(start_time.elapsed()),
-            samples.len()
+            total_samples
         );
         println!("{}", "=".repeat(60));
 
@@ -1428,40 +1472,13 @@ fn cmd_status_watch(
                         if let (Some(access_token), Some(account_id)) =
                             (&tokens.access_token, &tokens.account_id)
                         {
-                            match fetch_usage(access_token, account_id) {
-                                Ok(usage) => {
-                                    let primary_used = usage
-                                        .primary_window
-                                        .as_ref()
-                                        .map(|w| w.used_percent)
-                                        .unwrap_or(0.0);
-                                    let secondary_used = usage
-                                        .secondary_window
-                                        .as_ref()
-                                        .map(|w| w.used_percent)
-                                        .unwrap_or(0.0);
-                                    let code_review_used = usage
-                                        .code_review
-                                        .as_ref()
-                                        .map(|w| w.used_percent)
-                                        .unwrap_or(0.0);
-
-                                    samples.push(UsageSample {
-                                        timestamp: std::time::Instant::now(),
-                                        primary_used,
-                                        secondary_used,
-                                        code_review_used,
-                                    });
-
-                                    if samples.len() > 30 {
-                                        samples.remove(0);
-                                    }
-
-                                    print_watch_usage(&usage, &samples);
-                                }
-                                Err(e) => {
-                                    eprintln!("Error fetching usage: {}", e);
-                                }
+                            if let Err(e) = process_account_usage(
+                                "default",
+                                access_token,
+                                account_id,
+                                &mut samples_map,
+                            ) {
+                                eprintln!("Error fetching usage: {}", e);
                             }
                         }
                     }
@@ -1472,48 +1489,26 @@ fn cmd_status_watch(
         } else {
             for account_name in &accounts_to_check {
                 let account_auth_path = get_account_auth_path(config_dir, account_name);
-                let auth = load_codex_auth(&account_auth_path)?;
+                let auth = match load_codex_auth(&account_auth_path) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        eprintln!("Error loading auth for {}: {}", account_name, e);
+                        continue;
+                    }
+                };
 
                 if let Some(auth) = auth {
                     if let Some(tokens) = auth.tokens {
                         if let (Some(access_token), Some(account_id)) =
                             (&tokens.access_token, &tokens.account_id)
                         {
-                            match fetch_usage(access_token, account_id) {
-                                Ok(mut usage) => {
-                                    usage.account_name = account_name.clone();
-                                    let primary_used = usage
-                                        .primary_window
-                                        .as_ref()
-                                        .map(|w| w.used_percent)
-                                        .unwrap_or(0.0);
-                                    let secondary_used = usage
-                                        .secondary_window
-                                        .as_ref()
-                                        .map(|w| w.used_percent)
-                                        .unwrap_or(0.0);
-                                    let code_review_used = usage
-                                        .code_review
-                                        .as_ref()
-                                        .map(|w| w.used_percent)
-                                        .unwrap_or(0.0);
-
-                                    samples.push(UsageSample {
-                                        timestamp: std::time::Instant::now(),
-                                        primary_used,
-                                        secondary_used,
-                                        code_review_used,
-                                    });
-
-                                    if samples.len() > 30 {
-                                        samples.remove(0);
-                                    }
-
-                                    print_watch_usage(&usage, &samples);
-                                }
-                                Err(e) => {
-                                    eprintln!("Error fetching usage for {}: {}", account_name, e);
-                                }
+                            if let Err(e) = process_account_usage(
+                                account_name,
+                                access_token,
+                                account_id,
+                                &mut samples_map,
+                            ) {
+                                eprintln!("Error fetching usage for {}: {}", account_name, e);
                             }
                         }
                     }
@@ -1521,7 +1516,18 @@ fn cmd_status_watch(
             }
         }
 
-        std::thread::sleep(interval);
+        let sleep_slice = std::time::Duration::from_millis(250);
+        let mut remaining = interval;
+        while remaining > sleep_slice {
+            if !running.load(Ordering::SeqCst) {
+                break;
+            }
+            std::thread::sleep(sleep_slice);
+            remaining = remaining.checked_sub(sleep_slice).unwrap_or_default();
+        }
+        if running.load(Ordering::SeqCst) {
+            std::thread::sleep(remaining);
+        }
     }
 
     Ok(())
