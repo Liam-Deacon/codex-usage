@@ -242,12 +242,6 @@ pub struct CodexAuth {
     #[allow(dead_code)]
     pub api_key: Option<String>,
     pub tokens: Option<CodexTokens>,
-    pub user: Option<CodexUser>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct CodexUser {
-    pub email: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -259,7 +253,6 @@ pub struct CodexTokens {
 #[derive(Debug, Serialize, Clone)]
 pub struct UsageData {
     pub account_name: String,
-    pub email: Option<String>,
     pub status: String,
     pub plan: Option<String>,
     pub primary_window: Option<RateWindow>,
@@ -561,14 +554,9 @@ fn format_reset_time(seconds: u64) -> String {
     }
 }
 
-fn parse_usage_response(
-    data: serde_json::Value,
-    account_name: &str,
-    email: Option<String>,
-) -> UsageData {
+fn parse_usage_response(data: serde_json::Value, account_name: &str) -> UsageData {
     let mut usage = UsageData {
         account_name: account_name.to_string(),
-        email,
         status: "ok".to_string(),
         plan: None,
         primary_window: None,
@@ -657,7 +645,7 @@ fn parse_usage_response(
     usage
 }
 
-fn fetch_usage(access_token: &str, account_id: &str, email: Option<String>) -> Result<UsageData> {
+fn fetch_usage(access_token: &str, account_id: &str) -> Result<UsageData> {
     let client = reqwest::blocking::Client::new();
     let response = client
         .get(USAGE_API_URL)
@@ -675,7 +663,7 @@ fn fetch_usage(access_token: &str, account_id: &str, email: Option<String>) -> R
     }
 
     let data: serde_json::Value = response.json().context("Failed to parse response")?;
-    Ok(parse_usage_response(data, "current", email))
+    Ok(parse_usage_response(data, "current"))
 }
 
 fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
@@ -711,10 +699,6 @@ fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
-    let email = data
-        .get("email")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
     let status = data
         .get("status")
         .and_then(|v| v.as_str())
@@ -766,7 +750,6 @@ fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
 
     Some(UsageData {
         account_name,
-        email,
         status,
         plan,
         primary_window,
@@ -833,7 +816,6 @@ pub fn cmd_status(
                     if let (Some(access_token), Some(account_id)) =
                         (&tokens.access_token, &tokens.account_id)
                     {
-                        let email = auth.user.and_then(|u| u.email);
                         if !refresh {
                             if let Some(cached) = get_cached_usage(config_dir) {
                                 if json {
@@ -847,7 +829,7 @@ pub fn cmd_status(
                             }
                         }
 
-                        match fetch_usage(access_token, account_id, email) {
+                        match fetch_usage(access_token, account_id) {
                             Ok(usage) => {
                                 let _ = save_cache(config_dir, &usage);
                                 if json {
@@ -883,7 +865,6 @@ pub fn cmd_status(
                 if let (Some(access_token), Some(account_id)) =
                     (&tokens.access_token, &tokens.account_id)
                 {
-                    let email = auth.user.and_then(|u| u.email);
                     if !refresh {
                         if let Some(cached) = get_cached_usage(config_dir) {
                             if cached.account_name == *account_name {
@@ -893,7 +874,7 @@ pub fn cmd_status(
                         }
                     }
 
-                    match fetch_usage(access_token, account_id, email) {
+                    match fetch_usage(access_token, account_id) {
                         Ok(mut usage) => {
                             usage.account_name = account_name.clone();
                             let _ = save_cache(config_dir, &usage);
@@ -939,9 +920,6 @@ fn print_usage(usage: &UsageData, is_current: bool) {
     let current_marker = if is_current { " *" } else { "" };
     println!("{}", "=".repeat(50));
     println!("  {}{}", usage.account_name, current_marker);
-    if let Some(email) = &usage.email {
-        println!("  📧 {}", email);
-    }
     println!("{}", "=".repeat(50));
 
     println!("  🔑 Auth: {}", usage.auth_type);
@@ -1212,8 +1190,7 @@ pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
             if let (Some(access_token), Some(account_id)) =
                 (&tokens.access_token, &tokens.account_id)
             {
-                let email = auth.user.and_then(|u| u.email);
-                let usage = fetch_usage(access_token, account_id, email)?;
+                let usage = fetch_usage(access_token, account_id)?;
 
                 let (should_switch, reason) = should_cycle(&usage, &cycle_config);
 
