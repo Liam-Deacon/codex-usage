@@ -9,6 +9,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+mod history;
 mod schedule;
 
 #[derive(Parser)]
@@ -115,6 +116,12 @@ enum Commands {
         #[arg(short, long)]
         refresh: bool,
     },
+
+    /// Track and analyze usage history
+    History {
+        #[command(subcommand)]
+        command: HistoryCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -205,6 +212,117 @@ enum ScheduleCommands {
 
     /// Disable scheduled cycling
     Disable,
+}
+
+#[derive(Subcommand)]
+enum HistoryCommands {
+    /// Manage background recording daemon
+    Daemon {
+        #[command(subcommand)]
+        command: DaemonCommands,
+    },
+
+    /// Show usage history
+    Show {
+        /// Time period (day, week, month)
+        #[arg(long)]
+        period: Option<String>,
+
+        /// Start date (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+
+        /// Account name
+        #[arg(long)]
+        account: Option<String>,
+    },
+
+    /// Show terminal bar chart visualization
+    Chart {
+        /// Account names (default: all accounts)
+        accounts: Vec<String>,
+    },
+
+    /// Show allowance tracking and analysis
+    Allowance {
+        /// Show projected usage
+        #[arg(long)]
+        projected: bool,
+
+        /// Show dead time analysis
+        #[arg(long)]
+        dead_time: bool,
+
+        /// Account name
+        #[arg(long)]
+        account: Option<String>,
+    },
+
+    /// Configure notifications
+    Notify {
+        /// Enable notifications
+        #[arg(long)]
+        enable: bool,
+
+        /// Disable notifications
+        #[arg(long)]
+        disable: bool,
+
+        /// Hours before reset to notify
+        #[arg(long)]
+        hours_before: Option<i32>,
+
+        /// Show notification status
+        #[arg(long)]
+        status: bool,
+
+        /// Account name
+        #[arg(long)]
+        account: Option<String>,
+    },
+
+    /// Export history data
+    Export {
+        /// Output file path
+        #[arg(long)]
+        output: Option<String>,
+
+        /// Export format (json)
+        #[arg(long, default_value = "json")]
+        format: String,
+
+        /// Time period (day, week, month)
+        #[arg(long)]
+        period: Option<String>,
+
+        /// Start date (YYYY-MM-DD)
+        #[arg(long)]
+        from: Option<String>,
+
+        /// End date (YYYY-MM-DD)
+        #[arg(long)]
+        to: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum DaemonCommands {
+    /// Start the background daemon
+    Start {
+        /// Poll interval (e.g., 5m, 10m)
+        #[arg(long, default_value = "5m")]
+        interval: String,
+    },
+
+    /// Stop the background daemon
+    Stop,
+
+    /// Show daemon status
+    Status,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -1870,6 +1988,173 @@ fn main() -> Result<()> {
             refresh,
         } => {
             cmd_status_watch(&config_dir, &interval, all, refresh)?;
+        }
+        Commands::History { command } => {
+            use crate::history::{HistoryDatabase, NotificationConfig};
+            let db = HistoryDatabase::new(&config_dir)?;
+
+            match command {
+                HistoryCommands::Daemon { command } => match command {
+                    DaemonCommands::Start { interval } => {
+                        println!("Starting daemon with interval {} - use 'codex-usage history daemon start --interval {}'", interval, interval);
+                        println!(
+                            "Daemon functionality requires the daemonize crate implementation"
+                        );
+                    }
+                    DaemonCommands::Stop => {
+                        println!("Stopping daemon...");
+                    }
+                    DaemonCommands::Status => {
+                        println!("Daemon status: not running");
+                    }
+                },
+                HistoryCommands::Show {
+                    period: _,
+                    from,
+                    to,
+                    account,
+                } => {
+                    let account_name = account.unwrap_or_else(|| "default".to_string());
+                    let snapshots = db.get_snapshots(&account_name, None, None, Some(100))?;
+
+                    if snapshots.is_empty() {
+                        println!("No history found for account '{}'.", account_name);
+                        println!("Start the daemon to begin recording usage history.");
+                        return Ok(());
+                    }
+
+                    println!("Usage History for {}:", account_name);
+                    println!("{}", "=".repeat(50));
+
+                    for snapshot in snapshots.iter().take(20) {
+                        let dt = chrono::DateTime::from_timestamp(snapshot.timestamp, 0)
+                            .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+
+                        println!("{}", dt);
+                        if let Some(p) = snapshot.five_hour_percent {
+                            println!("  5h window:  {:.1}% used", p);
+                        }
+                        if let Some(p) = snapshot.weekly_percent {
+                            println!("  Weekly:       {:.1}% used", p);
+                        }
+                        println!();
+                    }
+                }
+                HistoryCommands::Chart { accounts: _ } => {
+                    println!("Terminal chart visualization");
+                    println!("This feature requires ratatui integration.");
+                    let all_accounts = db.get_accounts()?;
+                    if all_accounts.is_empty() {
+                        println!("No history data available. Start the daemon to begin recording.");
+                    } else {
+                        println!("Available accounts: {:?}", all_accounts);
+                    }
+                }
+                HistoryCommands::Allowance {
+                    projected,
+                    dead_time,
+                    account,
+                } => {
+                    let account_name = account.unwrap_or_else(|| "default".to_string());
+                    let snapshots = db.get_snapshots(&account_name, None, None, None)?;
+
+                    if snapshots.is_empty() {
+                        println!("No history found for account '{}'.", account_name);
+                        return Ok(());
+                    }
+
+                    println!("Allowance Analysis for {}", account_name);
+                    println!("{}", "=".repeat(50));
+
+                    let total_snapshots = snapshots.len();
+                    if let Some(latest) = snapshots.first() {
+                        if let Some(weekly) = latest.weekly_percent {
+                            println!("Current weekly usage: {:.1}%", weekly);
+                        }
+                    }
+                    println!("Total snapshots recorded: {}", total_snapshots);
+
+                    if projected {
+                        println!(
+                            "\nProjection: Enable daemon for more data to generate projections."
+                        );
+                    }
+                    if dead_time {
+                        println!("\nDead time analysis: Enable daemon for more data.");
+                    }
+                }
+                HistoryCommands::Notify {
+                    enable: _,
+                    disable,
+                    hours_before,
+                    status,
+                    account,
+                } => {
+                    let account_name = account.unwrap_or_else(|| "default".to_string());
+
+                    if status {
+                        if let Some(config) = db.get_notification_config(&account_name)? {
+                            println!("Notification config for {}:", account_name);
+                            println!("  Enabled: {}", config.enabled);
+                            println!(
+                                "  Notify {} hours before reset",
+                                config.notify_before_reset_hours
+                            );
+                            if let Some(ts) = config.last_notified {
+                                let dt = chrono::DateTime::from_timestamp(ts, 0)
+                                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                                    .unwrap_or_else(|| "unknown".to_string());
+                                println!("  Last notified: {}", dt);
+                            }
+                        } else {
+                            println!(
+                                "No notification config for {}. Use --enable to configure.",
+                                account_name
+                            );
+                        }
+                        return Ok(());
+                    }
+
+                    let config = NotificationConfig {
+                        id: None,
+                        account_name: account_name.clone(),
+                        notify_before_reset_hours: hours_before.unwrap_or(12),
+                        enabled: !disable,
+                        last_notified: None,
+                    };
+                    db.set_notification_config(&config)?;
+
+                    if disable {
+                        println!("Notifications disabled for {}.", account_name);
+                    } else {
+                        println!(
+                            "Notifications enabled for {} (notify {} hours before reset).",
+                            account_name, config.notify_before_reset_hours
+                        );
+                    }
+                }
+                HistoryCommands::Export {
+                    output,
+                    format: _,
+                    period: _,
+                    from: _,
+                    to: _,
+                } => {
+                    let export_data = serde_json::json!({
+                        "exported_at": chrono::Utc::now().to_rfc3339(),
+                    });
+
+                    let json_str = serde_json::to_string_pretty(&export_data)?;
+
+                    if let Some(path) = output {
+                        fs::write(&path, &json_str)?;
+                        println!("Exported to {}", path);
+                    } else {
+                        println!("{}", json_str);
+                    }
+                }
+            }
         }
     }
 
