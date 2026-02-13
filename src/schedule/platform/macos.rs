@@ -111,7 +111,7 @@ pub fn install_schedule(schedule: &WakeupSchedule) -> Result<()> {
     );
 
     if schedule.wake_system {
-        install_system_wake(&schedule.times)?;
+        install_system_wake(schedule)?;
     }
 
     Ok(())
@@ -141,12 +141,17 @@ pub fn remove_schedule() -> Result<()> {
         let output = Command::new("launchctl")
             .arg("bootout")
             .arg(&target)
-            .output()
-            .context("Failed to bootout launchd agent")?;
+            .output();
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Failed to bootout launchd agent: {}", stderr);
+        match output {
+            Ok(output) if output.status.success() => {}
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                eprintln!("Warning: Failed to bootout launchd agent: {}", stderr);
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to run bootout: {}", e);
+            }
         }
 
         fs::remove_file(&plist_path).context("Failed to remove launchd plist")?;
@@ -198,35 +203,55 @@ pub fn list_schedules() -> Result<Vec<String>> {
         }
     }
 
-    if schedules.is_empty() {
-        schedules.push(LAUNCH_AGENT_LABEL.to_string());
-    }
-
     Ok(schedules)
 }
 
-fn install_system_wake(times: &[chrono::NaiveTime]) -> Result<()> {
+fn install_system_wake(schedule: &WakeupSchedule) -> Result<()> {
     use nix::unistd::Uid;
 
     if !Uid::effective().is_root() {
         anyhow::bail!("--wake-system requires root privileges. Run with sudo.");
     }
 
-    let days = "MTWRF";
+    let days_map = [
+        ('1', "M"),
+        ('2', "T"),
+        ('3', "W"),
+        ('4', "R"),
+        ('5', "F"),
+        ('6', "S"),
+        ('7', "U"),
+    ];
+    let days: String = schedule
+        .days
+        .iter()
+        .filter_map(|&d| {
+            days_map
+                .iter()
+                .find(|(n, _)| *n == char::from_digit(d as u32, 10).unwrap())
+                .map(|(_, letter)| *letter)
+        })
+        .collect();
 
-    if times.len() > 1 {
+    let days = if days.is_empty() {
+        "MTWRF".to_string()
+    } else {
+        days
+    };
+
+    if schedule.times.len() > 1 {
         println!(
             "Warning: pmset repeat only supports one schedule. Using first time: {}",
-            times[0].format("%H:%M:%S")
+            schedule.times[0].format("%H:%M:%S")
         );
     }
 
-    let schedule_str = times[0].format("%H:%M:%S").to_string();
+    let schedule_str = schedule.times[0].format("%H:%M:%S").to_string();
 
     let output = Command::new("pmset")
         .arg("repeat")
         .arg("wakeorpoweron")
-        .arg(days)
+        .arg(&days)
         .arg(&schedule_str)
         .output()
         .context("Failed to set pmset wake schedule")?;
