@@ -110,12 +110,33 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Upload Release Asset
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+
+  publish:
+    name: Publish Release
+    needs: [release]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+            artifacts/macos-x64/*
+            artifacts/macos-arm64/*
+            artifacts/linux-x64/*
+            artifacts/linux-arm64/*
+            artifacts/windows-x64/*
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
