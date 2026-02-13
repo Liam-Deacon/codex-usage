@@ -206,6 +206,7 @@ struct CycleHistoryEntry {
 #[derive(Debug, Deserialize, Clone)]
 struct CodexAuth {
     #[serde(rename = "OPENAI_API_KEY")]
+    #[allow(dead_code)]
     api_key: Option<String>,
     tokens: Option<CodexTokens>,
 }
@@ -1082,20 +1083,18 @@ fn should_cycle(usage: &UsageData, config: &CycleConfig) -> (bool, String) {
                 ),
             )
         }
+    } else if five_hour_trigger {
+        (true, format!("5h: {:.0}% remaining", five_hour_remaining))
+    } else if weekly_trigger {
+        (true, format!("weekly: {:.0}% remaining", weekly_remaining))
     } else {
-        if five_hour_trigger {
-            (true, format!("5h: {:.0}% remaining", five_hour_remaining))
-        } else if weekly_trigger {
-            (true, format!("weekly: {:.0}% remaining", weekly_remaining))
-        } else {
-            (
-                false,
-                format!(
-                    "5h: {:.0}%, weekly: {:.0}%",
-                    five_hour_remaining, weekly_remaining
-                ),
-            )
-        }
+        (
+            false,
+            format!(
+                "5h: {:.0}%, weekly: {:.0}%",
+                five_hour_remaining, weekly_remaining
+            ),
+        )
     };
 
     reason
@@ -1120,11 +1119,7 @@ fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
         anyhow::bail!("No accounts configured. Add accounts first.");
     }
 
-    let current = config
-        .active_account
-        .as_ref()
-        .map(|s| s.as_str())
-        .unwrap_or("");
+    let current = config.active_account.as_deref().unwrap_or("");
 
     let current_idx = accounts
         .iter()
@@ -1243,7 +1238,7 @@ fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()> {
     let mut cycle_config = load_cycle_config(config_dir)?;
     cycle_config.accounts = accounts.clone();
 
-    let current = config.active_account.as_ref().map(|s| s.as_str());
+    let current = config.active_account.as_deref();
     if let Some(c) = current {
         if let Some(idx) = accounts.iter().position(|a| a.as_str() == c) {
             cycle_config.current_index = idx;
