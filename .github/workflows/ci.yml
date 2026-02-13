@@ -112,6 +112,12 @@ jobs:
           mkdir -p release
           if [[ "${{ matrix.platform }}" == windows* ]]; then
             cp target/${{ matrix.target }}/release/codex-usage.exe ./release/codex-usage.exe
+          elif [[ "${{ matrix.platform }}" == linux* ]] || [[ "${{ matrix.platform }}" == macos* ]]; then
+            mkdir -p "codex-usage-{{ matrix.platform }}"
+            cp target/${{ matrix.target }}/release/codex-usage "./codex-usage-{{ matrix.platform }}/codex-usage"
+            chmod +x "./codex-usage-{{ matrix.platform }}/codex-usage"
+            tar -czvf "release/codex-usage-{{ matrix.platform }}.tar.gz" "codex-usage-{{ matrix.platform }}"
+            rm -rf "codex-usage-{{ matrix.platform }}"
           else
             cp target/${{ matrix.target }}/release/codex-usage ./release/codex-usage
             chmod +x ./release/codex-usage
@@ -126,6 +132,83 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  packages:
+    name: Packages (RPM/DEB)
+    needs: release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            target: x86_64-unknown-linux-gnu
+            rust_arch: x86_64
+          - arch: arm64
+            target: aarch64-unknown-linux-gnu
+            rust_arch: aarch64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
+
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev rpm
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Create DEB package
+        run: bash scripts/build-deb.sh "${{ matrix.arch }}" "${{ matrix.target }}" "${{ github.ref_name }}"
+        working-directory: ${{ github.workspace }}
+
+      - name: Create RPM package
+        run: bash scripts/build-rpm.sh "${{ matrix.arch }}" "${{ matrix.target }}" "${{ matrix.rust_arch }}" "${{ github.ref_name }}"
+        working-directory: ${{ github.workspace }}
+
+      - name: Upload Package Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          file: release/*.deb release/*.rpm
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  source:
+    name: Source Tarball
+    needs: release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create source tarball
+        run: bash scripts/build-source.sh "${{ github.ref_name }}"
+
+      - name: Upload Source
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          file: release/*.tar.gz
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   homebrew:
     name: Homebrew
     needs: release
@@ -135,8 +218,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create Pull Request
-        run: |
-          # This would need to be customized based on the homebrew-tap repo
-          echo "Creating PR to Liam-Deacon/homebrew-tap..."
-          # PR creation would be handled manually or via another workflow
+      - name: Create Homebrew formula PR
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+          commit-message: "Update codex-usage to ${{ github.ref_name }}"
+          title: "Update codex-usage to ${{ github.ref_name }}"
+          body: |
+            Automated PR to update Homebrew formula for release ${{ github.ref_name }}.
+            
+            Note: SHA256 hashes need to be updated before merging.
+            Run `brew audit --strict Formula/codex-usage.rb` to verify.
+          branch: homebrew-update
+          base: main
+          repository: Liam-Deacon/homebrew-tap
+          path: Formula/codex-usage.rb
+          add-paths: Formula/codex-usage.rb
