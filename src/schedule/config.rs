@@ -126,6 +126,7 @@ impl WakeupConfig {
         self.schedules.iter_mut().find(|s| s.name == name)
     }
 
+    #[allow(dead_code)]
     pub fn remove_schedule(&mut self, name: &str) -> bool {
         let len_before = self.schedules.len();
         self.schedules.retain(|s| s.name != name);

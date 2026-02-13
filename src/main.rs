@@ -1688,11 +1688,24 @@ fn cmd_wakeup_install(
         wake_system,
     )?;
 
+    let schedule_name = schedule.name.clone();
+    let times_str: Vec<String> = schedule
+        .times
+        .iter()
+        .map(|t| t.format("%H:%M").to_string())
+        .collect();
+
     platform::install(&schedule)?;
 
     let mut config = load_wakeup_config_with_dir(config_dir)?;
     config.add_schedule(schedule);
     save_wakeup_config_with_dir(config_dir, &config)?;
+
+    println!(
+        "Installed wakeup schedule '{}' at {}",
+        schedule_name,
+        times_str.join(", ")
+    );
 
     Ok(())
 }
@@ -1728,8 +1741,7 @@ fn cmd_wakeup_list() -> Result<()> {
 
 fn cmd_wakeup_run(config_dir: &Path, account: Option<&str>, force: bool) -> Result<()> {
     if is_codex_running() && !force {
-        warn_codex_running();
-        anyhow::bail!("Aborted. Use --force to run wakeup anyway.");
+        anyhow::bail!("Codex is running — use --force to run wakeup anyway.");
     }
 
     if let Some(account_name) = account {
