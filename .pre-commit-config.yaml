@@ -11,8 +11,10 @@ repos:
       - id: check-merge-conflict
       - id: debug-statements
 
-  - repo: https://github.com/doublify/pre-commit-rust
-    rev: v1.0
-    hooks:
-      - id: fmt
-      - id: clippy
+  # Rust hooks disabled - rely on GitHub Actions CI for rust fmt/clippy
+  # Enable if you have cargo installed locally:
+  # - repo: https://github.com/doublify/pre-commit-rust
+  #   rev: v1.0
+  #   hooks:
+  #     - id: fmt
+  #     - id: clippy
