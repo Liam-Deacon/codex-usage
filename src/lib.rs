@@ -1,35 +1,63 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
+use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-#[allow(unused_imports)]
-use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
-mod schedule;
+#[cfg(unix)]
+use std::process::Command;
+
+#[cfg(feature = "pyo3")]
+use pyo3::{prelude::*, types::PyModule, wrap_pyfunction};
+
+#[cfg(feature = "pyo3")]
+#[pymodule]
+fn codex_usage(m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(run_py, m)?)?;
+    Ok(())
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn run_py() -> PyResult<String> {
+    let result = std::panic::catch_unwind(|| run_cli());
+
+    match result {
+        Ok(Ok(())) => Ok("Success".to_string()),
+        Ok(Err(e)) => {
+            let msg = format!("Error: {}", e);
+            eprintln!("{}", msg);
+            Err(pyo3::exceptions::PyRuntimeError::new_err(msg))
+        }
+        Err(e) => {
+            let msg = format!("Panic: {:?}", e);
+            eprintln!("{}", msg);
+            Err(pyo3::exceptions::PyRuntimeError::new_err(msg))
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(name = "codex-usage")]
 #[command(about = "Track OpenAI Codex usage with multi-account support", long_about = None)]
 #[command(arg_required_else_help = true)]
-struct Cli {
+pub struct Cli {
     #[command(subcommand)]
     command: Commands,
 
     /// Path to config directory (default: ~/.codex-usage)
     #[arg(short, long, env = "CODEX_USAGE_DIR")]
-    config_dir: Option<PathBuf>,
+    pub config_dir: Option<PathBuf>,
 
     /// Enable verbose logging
     #[arg(short, long, global = true, env = "CODEX_USAGE_VERBOSE")]
-    verbose: bool,
+    pub verbose: bool,
 }
 
 #[derive(Subcommand)]
-enum Commands {
+pub enum Commands {
     /// Check usage for active account (or all with --all)
     #[command(alias = "quota")]
     Status {
@@ -56,43 +84,23 @@ enum Commands {
         command: AccountCommands,
     },
 
-    /// Wakeup/schedule command for scheduled cycling
+    /// Wakeup Codex to utilize limits
     Wakeup {
-        /// Install the wakeup schedule to system scheduler
-        #[arg(long, group = "wakeup_action")]
+        /// Wakeup all accounts
+        #[arg(short, long)]
+        all: bool,
+
+        /// Configure wakeup schedule
+        #[arg(long)]
+        config: bool,
+
+        /// Install to system scheduler
+        #[arg(long)]
         install: bool,
 
-        /// Remove the wakeup schedule from system scheduler
-        #[arg(long, group = "wakeup_action")]
-        remove: bool,
-
-        /// List current wakeup schedules
-        #[arg(long, group = "wakeup_action")]
-        list: bool,
-
-        /// Time to trigger (repeatable, e.g., 08:00, 14:00)
-        #[arg(long, value_name = "TIME")]
-        at: Vec<String>,
-
-        /// Run periodically after --at times (e.g., 1h, 30m)
-        #[arg(long, value_name = "DURATION")]
-        interval: Option<String>,
-
-        /// Specific account to wake (default: all with cycling)
-        #[arg(long, value_name = "NAME")]
-        account: Option<String>,
-
-        /// Force wake even if Codex is running
+        /// Uninstall from system scheduler
         #[arg(long)]
-        force: bool,
-
-        /// Attempt to wake system from sleep (macOS: pmset)
-        #[arg(long)]
-        wake_system: bool,
-
-        /// Run wakeup now (used by scheduler)
-        #[arg(long, group = "wakeup_action")]
-        run: bool,
+        uninstall: bool,
     },
 
     /// Cycle through accounts when limits exhausted
@@ -100,25 +108,10 @@ enum Commands {
         #[command(subcommand)]
         command: CycleCommands,
     },
-
-    /// Continuously watch usage with live updates
-    Watch {
-        /// Poll interval (e.g., 10s, 30s, 1m)
-        #[arg(long, default_value = "10s")]
-        interval: String,
-
-        /// Watch all accounts
-        #[arg(short, long)]
-        all: bool,
-
-        /// Force refresh on each poll (skip cache)
-        #[arg(short, long)]
-        refresh: bool,
-    },
 }
 
 #[derive(Subcommand)]
-enum AccountCommands {
+pub enum AccountCommands {
     /// List all connected accounts
     List,
 
@@ -146,7 +139,7 @@ enum AccountCommands {
 }
 
 #[derive(Subcommand)]
-enum CycleCommands {
+pub enum CycleCommands {
     /// Show current cycle status
     Status,
 
@@ -195,7 +188,7 @@ enum CycleCommands {
 }
 
 #[derive(Subcommand)]
-enum ScheduleCommands {
+pub enum ScheduleCommands {
     /// Enable scheduled cycling
     Enable {
         /// Check interval in minutes
@@ -208,57 +201,71 @@ enum ScheduleCommands {
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
-struct Config {
-    active_account: Option<String>,
-    accounts: HashMap<String, AccountInfo>,
+pub struct Config {
+    pub active_account: Option<String>,
+    pub accounts: HashMap<String, AccountInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct AccountInfo {
-    added_at: String,
-    last_used: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-struct CycleConfig {
-    enabled: bool,
-    thresholds: CycleThresholds,
-    mode: String,
-    accounts: Vec<String>,
-    current_index: usize,
-    last_cycle: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Default)]
-struct CycleThresholds {
-    five_hour: f64,
-    weekly: f64,
+pub struct AccountInfo {
+    pub added_at: String,
+    pub last_used: Option<String>,
+    pub auth_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-struct CycleHistoryEntry {
-    timestamp: String,
-    from_account: String,
-    to_account: String,
-    reason: String,
+pub struct CycleConfig {
+    pub enabled: bool,
+    pub thresholds: CycleThresholds,
+    pub mode: String,
+    pub accounts: Vec<String>,
+    pub current_index: usize,
+    pub last_cycle: Option<String>,
+}
+
+impl Default for CycleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            thresholds: CycleThresholds::default(),
+            mode: "and".to_string(),
+            accounts: Vec::new(),
+            current_index: 0,
+            last_cycle: None,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct CycleThresholds {
+    pub five_hour: f64,
+    pub weekly: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CycleHistoryEntry {
+    pub timestamp: String,
+    pub from_account: String,
+    pub to_account: String,
+    pub reason: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-#[allow(dead_code)]
-struct CodexAuth {
+pub struct CodexAuth {
     #[serde(rename = "OPENAI_API_KEY")]
-    api_key: Option<String>,
-    tokens: Option<CodexTokens>,
+    #[allow(dead_code)]
+    pub api_key: Option<String>,
+    pub tokens: Option<CodexTokens>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
-struct CodexTokens {
-    access_token: Option<String>,
-    account_id: Option<String>,
+pub struct CodexTokens {
+    pub access_token: Option<String>,
+    pub account_id: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone)]
-struct UsageData {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct UsageData {
     pub account_name: String,
     pub status: String,
     pub plan: Option<String>,
@@ -269,41 +276,23 @@ struct UsageData {
     pub auth_type: String,
 }
 
-#[derive(Debug, Serialize, Clone)]
-struct RateWindow {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RateWindow {
     pub used_percent: f64,
     pub remaining_percent: f64,
     pub window: String,
     pub resets_in: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone)]
-struct CodeReview {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct CodeReview {
     pub used_percent: f64,
-}
-
-#[derive(Debug, Clone)]
-struct UsageSample {
-    timestamp: std::time::Instant,
-    primary_used: f64,
-    secondary_used: f64,
-    code_review_used: f64,
-}
-
-#[derive(Debug, Clone)]
-struct BurnRateStats {
-    primary_burn: f64,
-    primary_stddev: f64,
-    secondary_burn: f64,
-    secondary_stddev: f64,
-    code_review_burn: f64,
-    code_review_stddev: f64,
 }
 
 const USAGE_API_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const CACHE_TTL_SECS: u64 = 300;
 
-fn get_config_dir() -> PathBuf {
+pub fn get_config_dir() -> PathBuf {
     dirs::home_dir()
         .map(|p| p.join(".codex-usage"))
         .unwrap_or_else(|| PathBuf::from(".codex-usage"))
@@ -315,35 +304,48 @@ fn get_codex_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".codex"))
 }
 
-fn get_codex_auth_path() -> PathBuf {
+pub fn get_codex_auth_path() -> PathBuf {
     get_codex_dir().join("auth.json")
 }
 
-fn get_accounts_dir(config_dir: &Path) -> PathBuf {
+pub fn get_accounts_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("accounts")
 }
 
-fn get_account_auth_path(config_dir: &Path, name: &str) -> PathBuf {
-    get_accounts_dir(config_dir).join(name).join("auth.json")
+pub fn get_account_auth_path(config_dir: &Path, name: &str) -> PathBuf {
+    let sanitized = sanitize_account_name(name);
+    get_accounts_dir(config_dir)
+        .join(&sanitized)
+        .join("auth.json")
 }
 
-fn get_config_path(config_dir: &Path) -> PathBuf {
+fn sanitize_account_name(name: &str) -> String {
+    let sanitized = name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+    if sanitized.contains("..") || sanitized.starts_with('/') || sanitized.starts_with('\\') {
+        panic!("Invalid account name: {}", name);
+    }
+    sanitized
+}
+
+pub fn get_config_path(config_dir: &Path) -> PathBuf {
     config_dir.join("config.json")
 }
 
-fn get_cache_path(config_dir: &Path) -> PathBuf {
-    config_dir.join("usage_cache.json")
+pub fn get_cache_path(config_dir: &Path, account_name: &str) -> PathBuf {
+    let sanitized =
+        account_name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+    config_dir.join(format!("usage_cache_{}.json", sanitized))
 }
 
-fn get_cycle_config_path(config_dir: &Path) -> PathBuf {
+pub fn get_cycle_config_path(config_dir: &Path) -> PathBuf {
     config_dir.join("cycle.json")
 }
 
-fn get_cycle_history_path(config_dir: &Path) -> PathBuf {
+pub fn get_cycle_history_path(config_dir: &Path) -> PathBuf {
     config_dir.join("cycle_history.jsonl")
 }
 
-fn load_config(config_dir: &Path) -> Result<Config> {
+pub fn load_config(config_dir: &Path) -> Result<Config> {
     let config_path = get_config_path(config_dir);
     if config_path.exists() {
         let content = fs::read_to_string(&config_path)?;
@@ -354,14 +356,14 @@ fn load_config(config_dir: &Path) -> Result<Config> {
     }
 }
 
-fn save_config(config_dir: &Path, config: &Config) -> Result<()> {
+pub fn save_config(config_dir: &Path, config: &Config) -> Result<()> {
     let config_path = get_config_path(config_dir);
     let content = serde_json::to_string_pretty(config).context("Failed to serialize config")?;
     fs::write(&config_path, content).context("Failed to write config")?;
     Ok(())
 }
 
-fn load_cycle_config(config_dir: &Path) -> Result<CycleConfig> {
+pub fn load_cycle_config(config_dir: &Path) -> Result<CycleConfig> {
     let path = get_cycle_config_path(config_dir);
     if path.exists() {
         let content = fs::read_to_string(&path)?;
@@ -373,7 +375,7 @@ fn load_cycle_config(config_dir: &Path) -> Result<CycleConfig> {
     }
 }
 
-fn save_cycle_config(config_dir: &Path, config: &CycleConfig) -> Result<()> {
+pub fn save_cycle_config(config_dir: &Path, config: &CycleConfig) -> Result<()> {
     let path = get_cycle_config_path(config_dir);
     let content =
         serde_json::to_string_pretty(config).context("Failed to serialize cycle config")?;
@@ -381,7 +383,7 @@ fn save_cycle_config(config_dir: &Path, config: &CycleConfig) -> Result<()> {
     Ok(())
 }
 
-fn load_codex_auth(path: &Path) -> Result<Option<CodexAuth>> {
+pub fn load_codex_auth(path: &Path) -> Result<Option<CodexAuth>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -393,9 +395,19 @@ fn load_codex_auth(path: &Path) -> Result<Option<CodexAuth>> {
 fn is_codex_running() -> bool {
     #[cfg(unix)]
     {
-        let output = Command::new("pgrep").arg("-f").arg("codex").output();
+        let current_pid = std::process::id();
+        let output = Command::new("pgrep").arg("-f").arg("codex ").output();
         if let Ok(output) = output {
-            return output.status.success();
+            if output.status.success() {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                for line in pids.lines() {
+                    if let Ok(pid) = line.trim().parse::<u32>() {
+                        if pid != current_pid {
+                            return true;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -415,7 +427,13 @@ fn is_codex_running() -> bool {
                 }
                 #[cfg(windows)]
                 {
-                    return true;
+                    use sysinfo::System;
+                    let mut sys = System::new();
+                    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+                    if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid)) {
+                        return process.status() != sysinfo::ProcessStatus::Run;
+                    }
+                    return false;
                 }
             }
         }
@@ -441,7 +459,7 @@ fn copy_auth_file(from: &Path, to: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_accounts_list(config_dir: &Path) -> Result<()> {
+pub fn cmd_accounts_list(config_dir: &Path) -> Result<()> {
     let config = load_config(config_dir)?;
     if config.accounts.is_empty() {
         println!("No accounts configured. Run 'codex-usage accounts add <name>' to add one.");
@@ -469,7 +487,7 @@ fn cmd_accounts_list(config_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
+pub fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
     let codex_auth = get_codex_auth_path();
     if !codex_auth.exists() {
         anyhow::bail!(
@@ -477,17 +495,37 @@ fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
         );
     }
 
+    let auth_content = fs::read_to_string(&codex_auth)?;
+    let auth_digest = Sha256::digest(auth_content.as_bytes());
+    let auth_hash = format!("{:x}", auth_digest);
+
+    let mut config = load_config(config_dir)?;
+
+    for (existing_name, info) in &config.accounts {
+        if let Some(existing_hash) = &info.auth_hash {
+            if let Ok(existing_digest) = hex::decode(existing_hash) {
+                use std::cmp::Ordering;
+                if auth_digest.as_slice().cmp(&existing_digest) == Ordering::Equal {
+                    anyhow::bail!(
+                        "This account has already been added as '{}'. Use 'codex-usage accounts switch {}' to switch to it.",
+                        existing_name, existing_name
+                    );
+                }
+            }
+        }
+    }
+
     let account_auth_path = get_account_auth_path(config_dir, name);
     let accounts_dir = get_accounts_dir(config_dir);
     fs::create_dir_all(&accounts_dir).context("Failed to create accounts directory")?;
     copy_auth_file(&codex_auth, &account_auth_path)?;
 
-    let mut config = load_config(config_dir)?;
     config.accounts.insert(
         name.to_string(),
         AccountInfo {
             added_at: chrono::Utc::now().to_rfc3339(),
             last_used: None,
+            auth_hash: Some(auth_hash),
         },
     );
     save_config(config_dir, &config)?;
@@ -497,7 +535,7 @@ fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result<()> {
+pub fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result<()> {
     if is_codex_running() {
         warn_codex_running();
         if !force {
@@ -531,7 +569,7 @@ fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result<()>
     Ok(())
 }
 
-fn cmd_accounts_remove(config_dir: &Path, name: &str) -> Result<()> {
+pub fn cmd_accounts_remove(config_dir: &Path, name: &str) -> Result<()> {
     let account_auth_path = get_account_auth_path(config_dir, name);
     if !account_auth_path.exists() {
         anyhow::bail!("Account '{}' not found.", name);
@@ -654,8 +692,12 @@ fn parse_usage_response(data: serde_json::Value, account_name: &str) -> UsageDat
     usage
 }
 
-fn fetch_usage(access_token: &str, account_id: &str) -> Result<UsageData> {
-    let client = reqwest::blocking::Client::new();
+fn fetch_usage(
+    client: &reqwest::blocking::Client,
+    access_token: &str,
+    account_id: &str,
+    account_name: &str,
+) -> Result<UsageData> {
     let response = client
         .get(USAGE_API_URL)
         .header("Authorization", format!("Bearer {}", access_token))
@@ -672,11 +714,11 @@ fn fetch_usage(access_token: &str, account_id: &str) -> Result<UsageData> {
     }
 
     let data: serde_json::Value = response.json().context("Failed to parse response")?;
-    Ok(parse_usage_response(data, "current"))
+    Ok(parse_usage_response(data, account_name))
 }
 
-fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
-    let cache_path = get_cache_path(config_dir);
+fn get_cached_usage(config_dir: &Path, account_name: &str) -> Option<UsageData> {
+    let cache_path = get_cache_path(config_dir, account_name);
     if !cache_path.exists() {
         return None;
     }
@@ -703,74 +745,11 @@ fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
         return None;
     }
 
-    let account_name = data
-        .get("account_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-    let status = data
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("error")
-        .to_string();
-    let plan = data
-        .get("plan")
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let limit_reached = data
-        .get("limit_reached")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    let auth_type = data
-        .get("auth_type")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown")
-        .to_string();
-
-    let primary_window = data.get("primary_window").and_then(|pw| {
-        Some(RateWindow {
-            used_percent: pw.get("used_percent")?.as_f64()?,
-            remaining_percent: pw.get("remaining_percent")?.as_f64()?,
-            window: pw.get("window")?.as_str()?.to_string(),
-            resets_in: pw
-                .get("resets_in")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        })
-    });
-
-    let secondary_window = data.get("secondary_window").and_then(|sw| {
-        Some(RateWindow {
-            used_percent: sw.get("used_percent")?.as_f64()?,
-            remaining_percent: sw.get("remaining_percent")?.as_f64()?,
-            window: sw.get("window")?.as_str()?.to_string(),
-            resets_in: sw
-                .get("resets_in")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-        })
-    });
-
-    let code_review = data.get("code_review").and_then(|cr| {
-        Some(CodeReview {
-            used_percent: cr.get("used_percent")?.as_f64()?,
-        })
-    });
-
-    Some(UsageData {
-        account_name,
-        status,
-        plan,
-        primary_window,
-        secondary_window,
-        code_review,
-        limit_reached,
-        auth_type,
-    })
+    serde_json::from_value(data.clone()).ok()
 }
 
-fn save_cache(config_dir: &Path, usage: &UsageData) -> Result<()> {
-    let cache_path = get_cache_path(config_dir);
+fn save_cache(config_dir: &Path, usage: &UsageData, account_name: &str) -> Result<()> {
+    let cache_path = get_cache_path(config_dir, account_name);
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -796,7 +775,7 @@ fn get_status_icon(percent: f64) -> &'static str {
     }
 }
 
-fn cmd_status(
+pub fn cmd_status(
     config_dir: &Path,
     all: bool,
     json: bool,
@@ -826,27 +805,36 @@ fn cmd_status(
                         (&tokens.access_token, &tokens.account_id)
                     {
                         if !refresh {
-                            if let Some(cached) = get_cached_usage(config_dir) {
+                            let default_account = config
+                                .active_account
+                                .clone()
+                                .unwrap_or_else(|| "default".to_string());
+                            if let Some(cached) = get_cached_usage(config_dir, &default_account) {
                                 if json {
                                     println!("{}", serde_json::to_string_pretty(&cached)?);
                                 } else if oneline {
                                     print_oneline(&cached);
                                 } else {
-                                    print_usage(&cached);
+                                    print_usage(&cached, true);
                                 }
                                 return Ok(());
                             }
                         }
 
-                        match fetch_usage(access_token, account_id) {
+                        let client = reqwest::blocking::Client::new();
+                        let default_account = config
+                            .active_account
+                            .clone()
+                            .unwrap_or_else(|| "default".to_string());
+                        match fetch_usage(&client, access_token, account_id, &default_account) {
                             Ok(usage) => {
-                                let _ = save_cache(config_dir, &usage);
+                                let _ = save_cache(config_dir, &usage, &default_account);
                                 if json {
                                     println!("{}", serde_json::to_string_pretty(&usage)?);
                                 } else if oneline {
                                     print_oneline(&usage);
                                 } else {
-                                    print_usage(&usage);
+                                    print_usage(&usage, true);
                                 }
                                 return Ok(());
                             }
@@ -864,6 +852,7 @@ fn cmd_status(
     }
 
     let mut all_usages: Vec<UsageData> = Vec::new();
+    let client = reqwest::blocking::Client::new();
 
     for account_name in &accounts_to_check {
         let account_auth_path = get_account_auth_path(config_dir, account_name);
@@ -875,7 +864,7 @@ fn cmd_status(
                     (&tokens.access_token, &tokens.account_id)
                 {
                     if !refresh {
-                        if let Some(cached) = get_cached_usage(config_dir) {
+                        if let Some(cached) = get_cached_usage(config_dir, account_name) {
                             if cached.account_name == *account_name {
                                 all_usages.push(cached);
                                 continue;
@@ -883,10 +872,10 @@ fn cmd_status(
                         }
                     }
 
-                    match fetch_usage(access_token, account_id) {
+                    match fetch_usage(&client, access_token, account_id, account_name) {
                         Ok(mut usage) => {
                             usage.account_name = account_name.clone();
-                            let _ = save_cache(config_dir, &usage);
+                            let _ = save_cache(config_dir, &usage, account_name);
                             all_usages.push(usage);
                         }
                         Err(e) => {
@@ -902,29 +891,44 @@ fn cmd_status(
         anyhow::bail!("No usage data available for any account.");
     }
 
+    let usage_map: HashMap<String, UsageData> = all_usages
+        .into_iter()
+        .map(|u| (u.account_name.clone(), u))
+        .collect();
+
     if json {
-        if all_usages.len() == 1 {
-            println!("{}", serde_json::to_string_pretty(&all_usages[0])?);
+        if usage_map.len() == 1 {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&usage_map.values().next())?
+            );
         } else {
-            println!("{}", serde_json::to_string_pretty(&all_usages)?);
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&usage_map.values().collect::<Vec<_>>())?
+            );
         }
     } else if oneline {
-        for usage in &all_usages {
+        for usage in usage_map.values() {
             print_oneline(usage);
         }
     } else {
-        for usage in &all_usages {
-            print_usage(usage);
-            println!();
+        for account_name in &accounts_to_check {
+            let is_current = config.active_account.as_deref() == Some(account_name.as_str());
+            if let Some(usage) = usage_map.get(account_name) {
+                print_usage(usage, is_current);
+                println!();
+            }
         }
     }
 
     Ok(())
 }
 
-fn print_usage(usage: &UsageData) {
+fn print_usage(usage: &UsageData, is_current: bool) {
+    let current_marker = if is_current { " *" } else { "" };
     println!("{}", "=".repeat(50));
-    println!("  {}", usage.account_name);
+    println!("  {}{}", usage.account_name, current_marker);
     println!("{}", "=".repeat(50));
 
     println!("  🔑 Auth: {}", usage.auth_type);
@@ -1000,7 +1004,7 @@ fn print_oneline(usage: &UsageData) {
     }
 }
 
-fn cmd_cycle_status(config_dir: &Path) -> Result<()> {
+pub fn cmd_cycle_status(config_dir: &Path) -> Result<()> {
     let cycle_config = load_cycle_config(config_dir)?;
     let config = load_config(config_dir)?;
 
@@ -1059,7 +1063,7 @@ fn cmd_cycle_status(config_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_cycle_config(
+pub fn cmd_cycle_config(
     config_dir: &Path,
     five_hour: Option<f64>,
     weekly: Option<f64>,
@@ -1090,7 +1094,7 @@ fn cmd_cycle_config(
     Ok(())
 }
 
-fn cmd_cycle_enable(config_dir: &Path) -> Result<()> {
+pub fn cmd_cycle_enable(config_dir: &Path) -> Result<()> {
     let mut cycle_config = load_cycle_config(config_dir)?;
     cycle_config.enabled = true;
     save_cycle_config(config_dir, &cycle_config)?;
@@ -1098,7 +1102,7 @@ fn cmd_cycle_enable(config_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn cmd_cycle_disable(config_dir: &Path) -> Result<()> {
+pub fn cmd_cycle_disable(config_dir: &Path) -> Result<()> {
     let mut cycle_config = load_cycle_config(config_dir)?;
     cycle_config.enabled = false;
     save_cycle_config(config_dir, &cycle_config)?;
@@ -1124,13 +1128,10 @@ fn should_cycle(usage: &UsageData, config: &CycleConfig) -> (bool, String) {
 
     let reason = if config.mode == "and" {
         if five_hour_trigger && weekly_trigger {
-            let mut parts = Vec::new();
-            if five_hour_trigger {
-                parts.push(format!("5h: {:.0}% remaining", five_hour_remaining));
-            }
-            if weekly_trigger {
-                parts.push(format!("weekly: {:.0}% remaining", weekly_remaining));
-            }
+            let parts = [
+                format!("5h: {:.0}% remaining", five_hour_remaining),
+                format!("weekly: {:.0}% remaining", weekly_remaining),
+            ];
             (true, parts.join(", "))
         } else {
             (
@@ -1158,7 +1159,7 @@ fn should_cycle(usage: &UsageData, config: &CycleConfig) -> (bool, String) {
     reason
 }
 
-fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
+pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
     let cycle_config = load_cycle_config(config_dir)?;
     let config = load_config(config_dir)?;
 
@@ -1177,7 +1178,13 @@ fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
         anyhow::bail!("No accounts configured. Add accounts first.");
     }
 
-    let current = config.active_account.as_deref().unwrap_or("");
+    let current = config.active_account.as_deref();
+
+    if current.is_none() {
+        anyhow::bail!("No active account set. Use 'codex-usage accounts switch <name>' to set an active account.");
+    }
+
+    let current = current.unwrap();
 
     let current_idx = accounts
         .iter()
@@ -1187,15 +1194,17 @@ fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
     let next_idx = (current_idx + 1) % accounts.len();
     let next_account = &accounts[next_idx];
 
-    let account_auth_path = get_account_auth_path(config_dir, next_account);
-    let auth = load_codex_auth(&account_auth_path)?;
+    let current_account_auth_path = get_account_auth_path(config_dir, current);
+    let current_auth = load_codex_auth(&current_account_auth_path)?;
 
-    if let Some(auth) = auth {
+    let client = reqwest::blocking::Client::new();
+
+    if let Some(auth) = current_auth {
         if let Some(tokens) = auth.tokens {
             if let (Some(access_token), Some(account_id)) =
                 (&tokens.access_token, &tokens.account_id)
             {
-                let usage = fetch_usage(access_token, account_id)?;
+                let usage = fetch_usage(&client, access_token, account_id, current)?;
 
                 let (should_switch, reason) = should_cycle(&usage, &cycle_config);
 
@@ -1212,7 +1221,8 @@ fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
                         let backup_path = codex_auth.with_extension("json.backup");
                         fs::copy(&codex_auth, &backup_path).ok();
                     }
-                    copy_auth_file(&account_auth_path, &codex_auth)?;
+                    let next_account_auth_path = get_account_auth_path(config_dir, next_account);
+                    copy_auth_file(&next_account_auth_path, &codex_auth)?;
 
                     let mut updated_config = load_config(config_dir)?;
                     updated_config.active_account = Some(next_account.clone());
@@ -1246,14 +1256,22 @@ fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
                 } else {
                     println!("No cycle needed (thresholds not met: {})", reason);
                 }
+            } else {
+                anyhow::bail!("Missing access_token or account_id for current account. Cannot fetch usage for cycling.");
             }
+        } else {
+            anyhow::bail!(
+                "No tokens found in current account auth. Cannot fetch usage for cycling."
+            );
         }
+    } else {
+        anyhow::bail!("No auth data found for current account. Cannot fetch usage for cycling.");
     }
 
     Ok(())
 }
 
-fn cmd_cycle_history(config_dir: &Path) -> Result<()> {
+pub fn cmd_cycle_history(config_dir: &Path) -> Result<()> {
     let history_path = get_cycle_history_path(config_dir);
 
     if !history_path.exists() {
@@ -1284,348 +1302,7 @@ fn cmd_cycle_history(config_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn parse_interval(s: &str) -> Result<std::time::Duration> {
-    let s = s.trim();
-    if let Some(stripped) = s.strip_suffix('s') {
-        let val = stripped.parse::<u64>()?;
-        Ok(std::time::Duration::from_secs(val))
-    } else if let Some(stripped) = s.strip_suffix('m') {
-        let val = stripped.parse::<u64>()?;
-        Ok(std::time::Duration::from_secs(val * 60))
-    } else if let Some(stripped) = s.strip_suffix('h') {
-        let val = stripped.parse::<u64>()?;
-        Ok(std::time::Duration::from_secs(val * 3600))
-    } else if let Ok(val) = s.parse::<u64>() {
-        Ok(std::time::Duration::from_secs(val))
-    } else {
-        anyhow::bail!(
-            "Invalid interval format: {}. Use format like '10s', '30s', '1m', '1h'",
-            s
-        );
-    }
-}
-
-fn calculate_burn_rate(samples: &[UsageSample]) -> Option<BurnRateStats> {
-    if samples.len() < 2 {
-        return None;
-    }
-
-    let first = &samples[0];
-    let last = &samples[samples.len() - 1];
-    let elapsed_secs = first.timestamp.elapsed().as_secs_f64();
-
-    if elapsed_secs == 0.0 {
-        return None;
-    }
-
-    let primary_burn = (last.primary_used - first.primary_used) / elapsed_secs * 60.0;
-    let secondary_burn = (last.secondary_used - first.secondary_used) / elapsed_secs * 60.0;
-    let code_review_burn = (last.code_review_used - first.code_review_used) / elapsed_secs * 60.0;
-
-    let mut primary_diffs = Vec::new();
-    let mut secondary_diffs = Vec::new();
-    let mut code_review_diffs = Vec::new();
-
-    for i in 1..samples.len() {
-        let dt = samples[i].timestamp.elapsed().as_secs_f64();
-        if dt > 0.0 {
-            primary_diffs.push((samples[i].primary_used - samples[i - 1].primary_used) / dt * 60.0);
-            secondary_diffs
-                .push((samples[i].secondary_used - samples[i - 1].secondary_used) / dt * 60.0);
-            code_review_diffs
-                .push((samples[i].code_review_used - samples[i - 1].code_review_used) / dt * 60.0);
-        }
-    }
-
-    fn mean(v: &[f64]) -> f64 {
-        if v.is_empty() {
-            return 0.0;
-        }
-        v.iter().sum::<f64>() / v.len() as f64
-    }
-
-    fn stddev(v: &[f64]) -> f64 {
-        if v.len() < 2 {
-            return 0.0;
-        }
-        let m = mean(v);
-        let variance = v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / v.len() as f64;
-        variance.sqrt()
-    }
-
-    Some(BurnRateStats {
-        primary_burn,
-        primary_stddev: stddev(&primary_diffs),
-        secondary_burn,
-        secondary_stddev: stddev(&secondary_diffs),
-        code_review_burn,
-        code_review_stddev: stddev(&code_review_diffs),
-    })
-}
-
-fn format_burn_rate(burn: f64, stddev: f64) -> String {
-    if stddev > 0.0 {
-        format!("{:.1}%/min ±{:.1}", burn.abs(), stddev.abs())
-    } else {
-        format!("{:.1}%/min", burn.abs())
-    }
-}
-
-fn print_progress_bar(percent: f64, width: usize) -> String {
-    let filled = ((percent / 100.0) * width as f64).round() as usize;
-    let empty = width - filled;
-    format!("{}{}", "█".repeat(filled), "░".repeat(empty))
-}
-
-fn format_uptime(duration: std::time::Duration) -> String {
-    let total_secs = duration.as_secs();
-    let hours = total_secs / 3600;
-    let minutes = (total_secs % 3600) / 60;
-    let seconds = total_secs % 60;
-
-    if hours > 0 {
-        format!("{}h {}m {}s", hours, minutes, seconds)
-    } else if minutes > 0 {
-        format!("{}m {}s", minutes, seconds)
-    } else {
-        format!("{}s", seconds)
-    }
-}
-
-fn process_account_usage(
-    account_name: &str,
-    access_token: &str,
-    account_id: &str,
-    samples_map: &mut HashMap<String, VecDeque<UsageSample>>,
-) -> Result<()> {
-    let usage = fetch_usage(access_token, account_id)?;
-
-    let primary_used = usage
-        .primary_window
-        .as_ref()
-        .map(|w| w.used_percent)
-        .unwrap_or(0.0);
-    let secondary_used = usage
-        .secondary_window
-        .as_ref()
-        .map(|w| w.used_percent)
-        .unwrap_or(0.0);
-    let code_review_used = usage
-        .code_review
-        .as_ref()
-        .map(|w| w.used_percent)
-        .unwrap_or(0.0);
-
-    let samples = samples_map.entry(account_name.to_string()).or_default();
-    samples.push_back(UsageSample {
-        timestamp: std::time::Instant::now(),
-        primary_used,
-        secondary_used,
-        code_review_used,
-    });
-
-    while samples.len() > 30 {
-        samples.pop_front();
-    }
-
-    print_watch_usage(&usage, samples.make_contiguous());
-    Ok(())
-}
-
-fn cmd_status_watch(
-    config_dir: &Path,
-    interval_str: &str,
-    all: bool,
-    _refresh: bool,
-) -> Result<()> {
-    let interval = parse_interval(interval_str)?;
-    let start_time = std::time::Instant::now();
-    let mut samples_map: HashMap<String, VecDeque<UsageSample>> = HashMap::new();
-    let running = Arc::new(AtomicBool::new(true));
-    let running_clone = running.clone();
-
-    ctrlc::set_handler(move || {
-        running_clone.store(false, Ordering::SeqCst);
-    })?;
-
-    println!("Watching usage (Ctrl+C to stop)...");
-    println!();
-
-    loop {
-        if !running.load(Ordering::SeqCst) {
-            println!("\nStopped.");
-            break;
-        }
-
-        let config = load_config(config_dir)?;
-
-        let accounts_to_check: Vec<String> = if all {
-            config.accounts.keys().cloned().collect()
-        } else {
-            vec![config
-                .active_account
-                .clone()
-                .unwrap_or_else(|| "default".to_string())]
-        };
-
-        let now = chrono::Local::now();
-        println!("\x1B[2J\x1B[1H");
-        println!("Last updated: {}", now.format("%Y-%m-%d %H:%M:%S"));
-        let total_samples: usize = samples_map.values().map(VecDeque::len).sum();
-        println!(
-            "Uptime: {} | Samples: {}",
-            format_uptime(start_time.elapsed()),
-            total_samples
-        );
-        println!("{}", "=".repeat(60));
-
-        if accounts_to_check.is_empty()
-            || (accounts_to_check.len() == 1 && accounts_to_check[0] == "default")
-        {
-            let codex_auth_path = get_codex_auth_path();
-            if codex_auth_path.exists() {
-                let auth = load_codex_auth(&codex_auth_path)?;
-                if let Some(auth) = auth {
-                    if let Some(tokens) = auth.tokens {
-                        if let (Some(access_token), Some(account_id)) =
-                            (&tokens.access_token, &tokens.account_id)
-                        {
-                            if let Err(e) = process_account_usage(
-                                "default",
-                                access_token,
-                                account_id,
-                                &mut samples_map,
-                            ) {
-                                eprintln!("Error fetching usage: {}", e);
-                            }
-                        }
-                    }
-                }
-            } else {
-                println!("No active account. Run 'codex login' first.");
-            }
-        } else {
-            for account_name in &accounts_to_check {
-                let account_auth_path = get_account_auth_path(config_dir, account_name);
-                let auth = match load_codex_auth(&account_auth_path) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        eprintln!("Error loading auth for {}: {}", account_name, e);
-                        continue;
-                    }
-                };
-
-                if let Some(auth) = auth {
-                    if let Some(tokens) = auth.tokens {
-                        if let (Some(access_token), Some(account_id)) =
-                            (&tokens.access_token, &tokens.account_id)
-                        {
-                            if let Err(e) = process_account_usage(
-                                account_name,
-                                access_token,
-                                account_id,
-                                &mut samples_map,
-                            ) {
-                                eprintln!("Error fetching usage for {}: {}", account_name, e);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        let sleep_slice = std::time::Duration::from_millis(250);
-        let mut remaining = interval;
-        while remaining > sleep_slice {
-            if !running.load(Ordering::SeqCst) {
-                break;
-            }
-            std::thread::sleep(sleep_slice);
-            remaining = remaining.checked_sub(sleep_slice).unwrap_or_default();
-        }
-        if running.load(Ordering::SeqCst) {
-            std::thread::sleep(remaining);
-        }
-    }
-
-    Ok(())
-}
-
-fn print_watch_usage(usage: &UsageData, samples: &[UsageSample]) {
-    let burn_stats = calculate_burn_rate(samples);
-
-    println!("\n{}", usage.account_name);
-    println!("{}", "-".repeat(40));
-
-    if let Some(pw) = &usage.primary_window {
-        let burn_str = burn_stats
-            .as_ref()
-            .map(|b| {
-                format!(
-                    " (burn: {})",
-                    format_burn_rate(b.primary_burn, b.primary_stddev)
-                )
-            })
-            .unwrap_or_default();
-        println!("  {} Window:", pw.window);
-        println!(
-            "    {}  {:.1}% remaining{}",
-            print_progress_bar(pw.remaining_percent, 10),
-            pw.remaining_percent,
-            burn_str
-        );
-        if let Some(reset) = &pw.resets_in {
-            println!("    Resets in: {}", reset);
-        }
-    }
-
-    if let Some(sw) = &usage.secondary_window {
-        let burn_str = burn_stats
-            .as_ref()
-            .map(|b| {
-                format!(
-                    " (burn: {})",
-                    format_burn_rate(b.secondary_burn, b.secondary_stddev)
-                )
-            })
-            .unwrap_or_default();
-        println!("  {} Window:", sw.window);
-        println!(
-            "    {}  {:.1}% remaining{}",
-            print_progress_bar(sw.remaining_percent, 10),
-            sw.remaining_percent,
-            burn_str
-        );
-        if let Some(reset) = &sw.resets_in {
-            println!("    Resets in: {}", reset);
-        }
-    }
-
-    if let Some(cr) = &usage.code_review {
-        let burn_str = burn_stats
-            .as_ref()
-            .map(|b| {
-                format!(
-                    " (burn: {})",
-                    format_burn_rate(b.code_review_burn, b.code_review_stddev)
-                )
-            })
-            .unwrap_or_default();
-        println!("  Code Review:");
-        println!(
-            "    {}  {:.1}% used{}",
-            print_progress_bar(cr.used_percent, 10),
-            cr.used_percent,
-            burn_str
-        );
-    }
-
-    if usage.limit_reached {
-        println!("  ⚠️  Rate limit reached!");
-    }
-}
-
-fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()> {
+pub fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()> {
     let config = load_config(config_dir)?;
 
     for name in &accounts {
@@ -1654,96 +1331,7 @@ fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_wakeup_install(
-    config_dir: &Path,
-    times: &[String],
-    interval: Option<&str>,
-    account: Option<&str>,
-    wake_system: bool,
-) -> Result<()> {
-    use crate::schedule::{
-        create_schedule, load_wakeup_config_with_dir, parse_duration, parse_time, platform,
-        save_wakeup_config_with_dir,
-    };
-
-    if times.is_empty() {
-        anyhow::bail!("At least one --at time must be specified");
-    }
-
-    let parsed_times: Result<Vec<chrono::NaiveTime>, _> =
-        times.iter().map(|t| parse_time(t)).collect();
-    let times = parsed_times.context("Failed to parse times")?;
-
-    let interval_duration = if let Some(i) = interval {
-        Some(parse_duration(i).context("Failed to parse interval")?)
-    } else {
-        None
-    };
-
-    let schedule = create_schedule(
-        "default",
-        times,
-        interval_duration,
-        account.map(String::from),
-        wake_system,
-    )?;
-
-    platform::install(&schedule)?;
-
-    let mut config = load_wakeup_config_with_dir(config_dir)?;
-    config.add_schedule(schedule);
-    save_wakeup_config_with_dir(config_dir, &config)?;
-
-    Ok(())
-}
-
-fn cmd_wakeup_remove(config_dir: &Path) -> Result<()> {
-    use crate::schedule::{load_wakeup_config_with_dir, platform, save_wakeup_config_with_dir};
-
-    platform::remove()?;
-
-    let mut config = load_wakeup_config_with_dir(config_dir)?;
-    config.remove_schedule("default");
-    save_wakeup_config_with_dir(config_dir, &config)?;
-
-    Ok(())
-}
-
-fn cmd_wakeup_list() -> Result<()> {
-    use crate::schedule::platform;
-
-    let schedules = platform::list()?;
-
-    if schedules.is_empty() {
-        println!("No wakeup schedules configured.");
-    } else {
-        println!("Wakeup schedules:");
-        for schedule in &schedules {
-            println!("  - {}", schedule);
-        }
-    }
-
-    Ok(())
-}
-
-fn cmd_wakeup_run(config_dir: &Path, account: Option<&str>, force: bool) -> Result<()> {
-    if is_codex_running() && !force {
-        warn_codex_running();
-        anyhow::bail!("Aborted. Use --force to run wakeup anyway.");
-    }
-
-    if let Some(account_name) = account {
-        println!("Waking specific account: {}", account_name);
-        cmd_accounts_switch(config_dir, account_name, force)?;
-    } else {
-        println!("Running wakeup cycle...");
-        cmd_cycle_now(config_dir, force)?;
-    }
-
-    Ok(())
-}
-
-fn main() -> Result<()> {
+pub fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     let config_dir = cli.config_dir.unwrap_or_else(get_config_dir);
 
@@ -1753,7 +1341,8 @@ fn main() -> Result<()> {
         } else {
             tracing::Level::INFO
         })
-        .init();
+        .try_init()
+        .ok();
 
     tracing::debug!("Config directory: {:?}", config_dir);
 
@@ -1786,33 +1375,19 @@ fn main() -> Result<()> {
             }
         },
         Commands::Wakeup {
+            all,
+            config,
             install,
-            remove,
-            list,
-            at,
-            interval,
-            account,
-            force,
-            wake_system,
-            run,
+            uninstall,
         } => {
-            if run {
-                cmd_wakeup_run(&config_dir, account.as_deref(), force)?;
-            } else if list {
-                cmd_wakeup_list()?;
-            } else if remove {
-                cmd_wakeup_remove(&config_dir)?;
-            } else if install {
-                cmd_wakeup_install(
-                    &config_dir,
-                    &at,
-                    interval.as_deref(),
-                    account.as_deref(),
-                    wake_system,
-                )?;
-            } else {
-                anyhow::bail!("Must specify one of --install, --remove, --list, or --run");
-            }
+            tracing::debug!(
+                "Wakeup command: all={}, config={}, install={}, uninstall={}",
+                all,
+                config,
+                install,
+                uninstall
+            );
+            println!("codex-usage wakeup - use --all to wakeup all accounts");
         }
         Commands::Cycle { command } => match command {
             CycleCommands::Status => {
@@ -1852,13 +1427,6 @@ fn main() -> Result<()> {
                 }
             },
         },
-        Commands::Watch {
-            interval,
-            all,
-            refresh,
-        } => {
-            cmd_status_watch(&config_dir, &interval, all, refresh)?;
-        }
     }
 
     Ok(())
