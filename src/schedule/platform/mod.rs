@@ -2,25 +2,13 @@ use crate::schedule::config::WakeupSchedule;
 use anyhow::Result;
 
 #[cfg(target_os = "macos")]
-pub mod macos;
+mod macos;
 
 #[cfg(target_os = "linux")]
-pub mod unix;
+mod unix;
 
 #[cfg(target_os = "windows")]
-pub mod windows;
-
-#[cfg(target_os = "macos")]
-#[allow(unused_imports)]
-pub use macos::*;
-
-#[cfg(target_os = "linux")]
-#[allow(unused_imports)]
-pub use unix::*;
-
-#[cfg(target_os = "windows")]
-#[allow(unused_imports)]
-pub use windows::*;
+mod windows;
 
 pub fn install(schedule: &WakeupSchedule) -> Result<()> {
     #[cfg(target_os = "macos")]

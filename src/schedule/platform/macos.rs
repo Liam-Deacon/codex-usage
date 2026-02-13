@@ -214,24 +214,29 @@ fn install_system_wake(times: &[chrono::NaiveTime]) -> Result<()> {
 
     let days = "MTWRF";
 
-    for time in times {
-        let schedule_str = time.format("%H:%M:%S").to_string();
-
-        let output = Command::new("pmset")
-            .arg("repeat")
-            .arg("wakeorpoweron")
-            .arg(days)
-            .arg(&schedule_str)
-            .output()
-            .context("Failed to set pmset wake schedule")?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("Failed to set system wake: {}", stderr);
-        }
-
-        println!("Configured system wake for {} at {}", days, schedule_str);
+    if times.len() > 1 {
+        println!(
+            "Warning: pmset repeat only supports one schedule. Using first time: {}",
+            times[0].format("%H:%M:%S")
+        );
     }
+
+    let schedule_str = times[0].format("%H:%M:%S").to_string();
+
+    let output = Command::new("pmset")
+        .arg("repeat")
+        .arg("wakeorpoweron")
+        .arg(days)
+        .arg(&schedule_str)
+        .output()
+        .context("Failed to set pmset wake schedule")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to set system wake: {}", stderr);
+    }
+
+    println!("Configured system wake for {} at {}", days, schedule_str);
 
     Ok(())
 }
