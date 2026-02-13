@@ -19,7 +19,6 @@ codex-usage = "codex_usage:run_py"
 
 [tool.maturin]
 features = ["pyo3"]
-python-source = "src"
 module-name = "codex_usage"
 
 [tool.cibuildwheel]

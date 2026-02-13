@@ -320,8 +320,10 @@ pub fn get_config_path(config_dir: &Path) -> PathBuf {
     config_dir.join("config.json")
 }
 
-pub fn get_cache_path(config_dir: &Path) -> PathBuf {
-    config_dir.join("usage_cache.json")
+pub fn get_cache_path(config_dir: &Path, account_name: &str) -> PathBuf {
+    let sanitized =
+        account_name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+    config_dir.join(format!("usage_cache_{}.json", sanitized))
 }
 
 pub fn get_cycle_config_path(config_dir: &Path) -> PathBuf {
@@ -693,8 +695,8 @@ fn fetch_usage(
     Ok(parse_usage_response(data, "current"))
 }
 
-fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
-    let cache_path = get_cache_path(config_dir);
+fn get_cached_usage(config_dir: &Path, account_name: &str) -> Option<UsageData> {
+    let cache_path = get_cache_path(config_dir, account_name);
     if !cache_path.exists() {
         return None;
     }
@@ -724,8 +726,8 @@ fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
     serde_json::from_value(data.clone()).ok()
 }
 
-fn save_cache(config_dir: &Path, usage: &UsageData) -> Result<()> {
-    let cache_path = get_cache_path(config_dir);
+fn save_cache(config_dir: &Path, usage: &UsageData, account_name: &str) -> Result<()> {
+    let cache_path = get_cache_path(config_dir, account_name);
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -781,7 +783,11 @@ pub fn cmd_status(
                         (&tokens.access_token, &tokens.account_id)
                     {
                         if !refresh {
-                            if let Some(cached) = get_cached_usage(config_dir) {
+                            let default_account = config
+                                .active_account
+                                .clone()
+                                .unwrap_or_else(|| "default".to_string());
+                            if let Some(cached) = get_cached_usage(config_dir, &default_account) {
                                 if json {
                                     println!("{}", serde_json::to_string_pretty(&cached)?);
                                 } else if oneline {
@@ -794,9 +800,13 @@ pub fn cmd_status(
                         }
 
                         let client = reqwest::blocking::Client::new();
+                        let default_account = config
+                            .active_account
+                            .clone()
+                            .unwrap_or_else(|| "default".to_string());
                         match fetch_usage(&client, access_token, account_id) {
                             Ok(usage) => {
-                                let _ = save_cache(config_dir, &usage);
+                                let _ = save_cache(config_dir, &usage, &default_account);
                                 if json {
                                     println!("{}", serde_json::to_string_pretty(&usage)?);
                                 } else if oneline {
@@ -832,7 +842,7 @@ pub fn cmd_status(
                     (&tokens.access_token, &tokens.account_id)
                 {
                     if !refresh {
-                        if let Some(cached) = get_cached_usage(config_dir) {
+                        if let Some(cached) = get_cached_usage(config_dir, account_name) {
                             if cached.account_name == *account_name {
                                 all_usages.push(cached);
                                 continue;
@@ -843,7 +853,7 @@ pub fn cmd_status(
                     match fetch_usage(&client, access_token, account_id) {
                         Ok(mut usage) => {
                             usage.account_name = account_name.clone();
-                            let _ = save_cache(config_dir, &usage);
+                            let _ = save_cache(config_dir, &usage, account_name);
                             all_usages.push(usage);
                         }
                         Err(e) => {
@@ -1146,7 +1156,13 @@ pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
         anyhow::bail!("No accounts configured. Add accounts first.");
     }
 
-    let current = config.active_account.as_deref().unwrap_or("");
+    let current = config.active_account.as_deref();
+
+    if current.is_none() {
+        anyhow::bail!("No active account set. Use 'codex-usage accounts switch <name>' to set an active account.");
+    }
+
+    let current = current.unwrap();
 
     let current_idx = accounts
         .iter()
@@ -1295,7 +1311,8 @@ pub fn run_cli() -> Result<()> {
         } else {
             tracing::Level::INFO
         })
-        .init();
+        .try_init()
+        .ok();
 
     tracing::debug!("Config directory: {:?}", config_dir);
 
