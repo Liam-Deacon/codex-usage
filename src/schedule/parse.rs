@@ -37,10 +37,18 @@ pub fn parse_time(input: &str) -> Result<NaiveTime, ParseError> {
             .parse()
             .map_err(|_| ParseError::InvalidTime(input.clone()))?;
 
+        if !(1..=12).contains(&hours) {
+            return Err(ParseError::InvalidTime(input.clone()));
+        }
+
         let minutes: u32 = minutes_str
             .unwrap_or("0")
             .parse()
             .map_err(|_| ParseError::InvalidTime(input.clone()))?;
+
+        if minutes > 59 {
+            return Err(ParseError::InvalidTime(input.clone()));
+        }
 
         let hours = if is_pm {
             if hours == 12 {
@@ -48,16 +56,14 @@ pub fn parse_time(input: &str) -> Result<NaiveTime, ParseError> {
             } else {
                 hours + 12
             }
+        } else if hours == 12 {
+            0
         } else {
-            if hours == 12 {
-                0
-            } else {
-                hours
-            }
+            hours
         };
 
-        return Ok(NaiveTime::from_hms_opt(hours % 24, minutes, 0)
-            .ok_or_else(|| ParseError::InvalidTime(input.clone()))?);
+        return NaiveTime::from_hms_opt(hours % 24, minutes, 0)
+            .ok_or_else(|| ParseError::InvalidTime(input.clone()));
     }
 
     Err(ParseError::InvalidTime(input))
@@ -109,6 +115,7 @@ pub fn parse_duration(input: &str) -> Result<Duration, ParseError> {
     Err(ParseError::InvalidDuration(input))
 }
 
+#[allow(dead_code)]
 pub fn format_duration(duration: &Duration) -> String {
     let total_secs = duration.as_secs();
 

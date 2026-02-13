@@ -86,6 +86,12 @@ pub fn install_schedule(schedule: &WakeupSchedule) -> Result<()> {
     let uid = nix::unistd::Uid::current().as_raw();
     let target = format!("gui/{}", uid);
 
+    let _ = Command::new("launchctl")
+        .arg("bootout")
+        .arg(&target)
+        .arg(&plist_path)
+        .output();
+
     let output = Command::new("launchctl")
         .arg("bootstrap")
         .arg(&target)
@@ -114,7 +120,21 @@ pub fn install_schedule(schedule: &WakeupSchedule) -> Result<()> {
 pub fn remove_schedule() -> Result<()> {
     let plist_path = get_launch_agent_path()?;
 
+    let mut should_remove_system_wake = false;
+
     if plist_path.exists() {
+        if let Ok(content) = fs::read_to_string(&plist_path) {
+            if let Ok(plist) = Value::from_reader_xml(content.as_bytes()) {
+                if let Some(dict) = plist.as_dictionary() {
+                    if let Some(args) = dict.get("ProgramArguments").and_then(|v| v.as_array()) {
+                        should_remove_system_wake = args
+                            .iter()
+                            .any(|arg| arg.as_string().map_or(false, |s| s == "--wake-system"));
+                    }
+                }
+            }
+        }
+
         let uid = nix::unistd::Uid::current().as_raw();
         let target = format!("gui/{}/{}", uid, LAUNCH_AGENT_LABEL);
 
@@ -133,7 +153,9 @@ pub fn remove_schedule() -> Result<()> {
         println!("Removed wakeup schedule.");
     }
 
-    remove_system_wake()?;
+    if should_remove_system_wake {
+        remove_system_wake()?;
+    }
 
     Ok(())
 }

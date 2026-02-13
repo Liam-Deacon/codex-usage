@@ -43,6 +43,11 @@ pub fn install_schedule(schedule: &WakeupSchedule) -> Result<()> {
     } else {
         format!("{}\n{}", filtered.join("\n"), cron_entries.join("\n"))
     };
+    let new_crontab = if !new_crontab.ends_with('\n') {
+        format!("{}\n", new_crontab)
+    } else {
+        new_crontab
+    };
 
     set_crontab(&new_crontab)?;
 
@@ -73,7 +78,13 @@ pub fn remove_schedule() -> Result<()> {
             return Ok(());
         }
     } else {
-        set_crontab(&filtered.join("\n"))?;
+        let filtered_crontab = filtered.join("\n");
+        let filtered_crontab = if !filtered_crontab.ends_with('\n') {
+            format!("{}\n", filtered_crontab)
+        } else {
+            filtered_crontab
+        };
+        set_crontab(&filtered_crontab)?;
     }
 
     println!("Removed wakeup schedule.");

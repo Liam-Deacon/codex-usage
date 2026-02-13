@@ -91,7 +91,7 @@ enum Commands {
         wake_system: bool,
 
         /// Run wakeup now (used by scheduler)
-        #[arg(long, group = "wakeup_action")]
+        #[arg(long, group = "wakeup_action", required = true)]
         run: bool,
     },
 
@@ -1703,7 +1703,7 @@ fn cmd_wakeup_remove(config_dir: &Path) -> Result<()> {
     platform::remove()?;
 
     let mut config = load_wakeup_config_with_dir(config_dir)?;
-    config.remove_schedule("default");
+    config.clear_schedules();
     save_wakeup_config_with_dir(config_dir, &config)?;
 
     Ok(())
