@@ -21,6 +21,7 @@ pub struct WakeupSchedule {
     pub interval: Option<Duration>,
     pub wake_system: bool,
     pub enabled: bool,
+    pub days: Vec<u8>,
 }
 
 mod serde_duration {
@@ -55,6 +56,7 @@ impl Default for WakeupSchedule {
             interval: None,
             wake_system: false,
             enabled: true,
+            days: vec![1, 2, 3, 4, 5],
         }
     }
 }

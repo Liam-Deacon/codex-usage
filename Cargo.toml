@@ -33,13 +33,12 @@ chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"
 sha2 = "0.10"
 hex = "0.4"
+ctrlc = "3.2"
+pyo3 = { version = "0.20", optional = true, features = ["extension-module"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 plist = "1.7"
 nix = { version = "0.29", features = ["user"] }
-ctrlc = "3.2"
-
-pyo3 = { version = "0.20", optional = true, features = ["extension-module"] }
 
 [target.'cfg(windows)'.dependencies]
 sysinfo = "0.32"
