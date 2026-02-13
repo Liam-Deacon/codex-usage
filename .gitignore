@@ -3,6 +3,13 @@
 **/target/
 Cargo.lock
 
+# Release artifacts
+/release/
+*.tar.gz
+*.zip
+*.deb
+*.rpm
+
 # IDE
 .idea/
 .vscode/
