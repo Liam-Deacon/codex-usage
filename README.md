@@ -139,10 +139,16 @@ Trigger Codex to utilize daily/weekly limits:
 
 ```bash
 # Wakeup active account
-codex-usage wakeup
+codex-usage wakeup run
 
 # Wakeup all accounts (sequential)
-codex-usage wakeup --all
+codex-usage wakeup run --all
+
+# Configure wakeup
+codex-usage wakeup config --prompt "hi" --timeout 30
+
+# Install to scheduler
+codex-usage wakeup install --interval 60
 ```
 
 ## Configuration
@@ -168,6 +174,7 @@ export CODEX_USAGE_DIR=/path/to/config
 - `cycle.json` - Cycle configuration
 - `cycle_history.jsonl` - Cycle history
 - `usage_cache.json` - Usage data cache
+- `wakeup.json` - Wakeup configuration
 
 ## Environment Variables
 

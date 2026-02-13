@@ -1,0 +1,39 @@
+set(CPACK_PACKAGE_NAME "codex-usage")
+set(CPACK_PACKAGE_VENDOR "Liam Deacon")
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "CLI tool to track OpenAI Codex usage with multi-account support")
+set(CPACK_PACKAGE_VERSION "0.1.0")
+set(CPACK_PACKAGE_VERSION_MAJOR "0")
+set(CPACK_PACKAGE_VERSION_MINOR "1")
+set(CPACK_PACKAGE_VERSION_PATCH "0")
+
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "codex-usage")
+
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
+
+set(CPACK_SOURCE_GENERATE_TGZ ON)
+set(CPACK_SOURCE_IGNORE_FILES
+    "\\.git"
+    "\\.github"
+    "target"
+    "Cargo\\.lock"
+    "\\.prettierrc"
+    "\\.gitignore"
+)
+
+# DEB package settings
+set(CPACK_DEBIAN_PACKAGE_NAME "codex-usage")
+set(CPACK_DEBIAN_PACKAGE_VERSION "${CPACK_PACKAGE_VERSION}")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Liam Deacon")
+set(CPACK_DEBIAN_PACKAGE_DESCRIPTION_SUMMARY "Track OpenAI Codex usage with multi-account support")
+
+# RPM package settings
+set(CPACK_RPM_PACKAGE_NAME "codex-usage")
+set(CPACK_RPM_PACKAGE_VERSION "${CPACK_PACKAGE_VERSION}")
+set(CPACK_RPM_PACKAGE_RELEASE "1")
+set(CPACK_RPM_PACKAGE_LICENSE "MIT")
+
+# TGZ settings
+set(CPACK_TGZ_FILE_NAME "${CPACK_PACKAGE_NAME}-${CPACK_PACKAGE_VERSION}-linux-x86_64.tar.gz")
+
+include(CPack)

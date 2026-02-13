@@ -1,0 +1,26 @@
+{
+    "version": "0.1.0",
+    "description": "CLI tool to track OpenAI Codex usage with multi-account support",
+    "homepage": "https://github.com/Liam-Deacon/codex-usage",
+    "license": "MIT",
+    "authors": [
+        "Liam Deacon"
+    ],
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/Liam-Deacon/codex-usage/releases/download/v0.1.0/codex-usage-x86_64-pc-windows-msvc.exe",
+            "hash": ""
+        }
+    },
+    "bin": "codex-usage.exe",
+    "checkver": {
+        "github": "https://github.com/Liam-Deacon/codex-usage"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/Liam-Deacon/codex-usage/releases/download/v$version/codex-usage-x86_64-pc-windows-msvc.exe"
+            }
+        }
+    }
+}
