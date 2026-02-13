@@ -75,6 +75,21 @@ enum Commands {
         #[command(subcommand)]
         command: CycleCommands,
     },
+
+    /// Continuously watch usage with live updates
+    Watch {
+        /// Poll interval (e.g., 10s, 30s, 1m)
+        #[arg(long, default_value = "10s")]
+        interval: String,
+
+        /// Watch all accounts
+        #[arg(short, long)]
+        all: bool,
+
+        /// Force refresh on each poll (skip cache)
+        #[arg(short, long)]
+        refresh: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -239,6 +254,24 @@ struct RateWindow {
 #[derive(Debug, Serialize, Clone)]
 struct CodeReview {
     pub used_percent: f64,
+}
+
+#[derive(Debug, Clone)]
+struct UsageSample {
+    timestamp: std::time::Instant,
+    primary_used: f64,
+    secondary_used: f64,
+    code_review_used: f64,
+}
+
+#[derive(Debug, Clone)]
+struct BurnRateStats {
+    primary_burn: f64,
+    primary_stddev: f64,
+    secondary_burn: f64,
+    secondary_stddev: f64,
+    code_review_burn: f64,
+    code_review_stddev: f64,
 }
 
 const USAGE_API_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -1231,6 +1264,343 @@ fn cmd_cycle_history(config_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+fn parse_interval(s: &str) -> Result<std::time::Duration> {
+    let s = s.trim();
+    if let Some(stripped) = s.strip_suffix('s') {
+        let val = stripped.parse::<u64>()?;
+        Ok(std::time::Duration::from_secs(val))
+    } else if let Some(stripped) = s.strip_suffix('m') {
+        let val = stripped.parse::<u64>()?;
+        Ok(std::time::Duration::from_secs(val * 60))
+    } else if let Some(stripped) = s.strip_suffix('h') {
+        let val = stripped.parse::<u64>()?;
+        Ok(std::time::Duration::from_secs(val * 3600))
+    } else {
+        anyhow::bail!(
+            "Invalid interval format: {}. Use format like '10s', '30s', '1m', '1h'",
+            s
+        );
+    }
+}
+
+fn calculate_burn_rate(samples: &[UsageSample]) -> Option<BurnRateStats> {
+    if samples.len() < 2 {
+        return None;
+    }
+
+    let first = &samples[0];
+    let last = &samples[samples.len() - 1];
+    let elapsed_secs = first.timestamp.elapsed().as_secs_f64();
+
+    if elapsed_secs == 0.0 {
+        return None;
+    }
+
+    let primary_burn = (last.primary_used - first.primary_used) / elapsed_secs * 60.0;
+    let secondary_burn = (last.secondary_used - first.secondary_used) / elapsed_secs * 60.0;
+    let code_review_burn = (last.code_review_used - first.code_review_used) / elapsed_secs * 60.0;
+
+    let mut primary_diffs = Vec::new();
+    let mut secondary_diffs = Vec::new();
+    let mut code_review_diffs = Vec::new();
+
+    for i in 1..samples.len() {
+        let dt = samples[i].timestamp.elapsed().as_secs_f64();
+        if dt > 0.0 {
+            primary_diffs.push((samples[i].primary_used - samples[i - 1].primary_used) / dt * 60.0);
+            secondary_diffs
+                .push((samples[i].secondary_used - samples[i - 1].secondary_used) / dt * 60.0);
+            code_review_diffs
+                .push((samples[i].code_review_used - samples[i - 1].code_review_used) / dt * 60.0);
+        }
+    }
+
+    fn mean(v: &[f64]) -> f64 {
+        if v.is_empty() {
+            return 0.0;
+        }
+        v.iter().sum::<f64>() / v.len() as f64
+    }
+
+    fn stddev(v: &[f64]) -> f64 {
+        if v.len() < 2 {
+            return 0.0;
+        }
+        let m = mean(v);
+        let variance = v.iter().map(|x| (x - m).powi(2)).sum::<f64>() / v.len() as f64;
+        variance.sqrt()
+    }
+
+    Some(BurnRateStats {
+        primary_burn,
+        primary_stddev: stddev(&primary_diffs),
+        secondary_burn,
+        secondary_stddev: stddev(&secondary_diffs),
+        code_review_burn,
+        code_review_stddev: stddev(&code_review_diffs),
+    })
+}
+
+fn format_burn_rate(burn: f64, stddev: f64) -> String {
+    if stddev > 0.0 {
+        format!("{:.1}%/min ±{:.1}", burn.abs(), stddev.abs())
+    } else {
+        format!("{:.1}%/min", burn.abs())
+    }
+}
+
+fn print_progress_bar(percent: f64, width: usize) -> String {
+    let filled = ((percent / 100.0) * width as f64).round() as usize;
+    let empty = width - filled;
+    format!("{}{}", "█".repeat(filled), "░".repeat(empty))
+}
+
+fn format_uptime(duration: std::time::Duration) -> String {
+    let total_secs = duration.as_secs();
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+
+    if hours > 0 {
+        format!("{}h {}m {}s", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}m {}s", minutes, seconds)
+    } else {
+        format!("{}s", seconds)
+    }
+}
+
+fn cmd_status_watch(
+    config_dir: &Path,
+    interval_str: &str,
+    all: bool,
+    _refresh: bool,
+) -> Result<()> {
+    let interval = parse_interval(interval_str)?;
+    let start_time = std::time::Instant::now();
+    let mut samples: Vec<UsageSample> = Vec::new();
+    let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let running_clone = running.clone();
+
+    ctrlc::set_handler(move || {
+        running_clone.store(false, std::sync::atomic::Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl-C handler");
+
+    println!("Watching usage (Ctrl+C to stop)...");
+    println!();
+
+    loop {
+        if !running.load(std::sync::atomic::Ordering::SeqCst) {
+            println!("\nStopped.");
+            break;
+        }
+
+        let config = load_config(config_dir)?;
+
+        let accounts_to_check: Vec<String> = if all {
+            config.accounts.keys().cloned().collect()
+        } else {
+            vec![config
+                .active_account
+                .clone()
+                .unwrap_or_else(|| "default".to_string())]
+        };
+
+        let now = chrono::Local::now();
+        println!("\x1B[2J\x1B[1H");
+        println!("Last updated: {}", now.format("%Y-%m-%d %H:%M:%S"));
+        println!(
+            "Uptime: {} | Samples: {}",
+            format_uptime(start_time.elapsed()),
+            samples.len()
+        );
+        println!("{}", "=".repeat(60));
+
+        if accounts_to_check.is_empty()
+            || (accounts_to_check.len() == 1 && accounts_to_check[0] == "default")
+        {
+            let codex_auth_path = get_codex_auth_path();
+            if codex_auth_path.exists() {
+                let auth = load_codex_auth(&codex_auth_path)?;
+                if let Some(auth) = auth {
+                    if let Some(tokens) = auth.tokens {
+                        if let (Some(access_token), Some(account_id)) =
+                            (&tokens.access_token, &tokens.account_id)
+                        {
+                            match fetch_usage(access_token, account_id) {
+                                Ok(usage) => {
+                                    let primary_used = usage
+                                        .primary_window
+                                        .as_ref()
+                                        .map(|w| w.used_percent)
+                                        .unwrap_or(0.0);
+                                    let secondary_used = usage
+                                        .secondary_window
+                                        .as_ref()
+                                        .map(|w| w.used_percent)
+                                        .unwrap_or(0.0);
+                                    let code_review_used = usage
+                                        .code_review
+                                        .as_ref()
+                                        .map(|w| w.used_percent)
+                                        .unwrap_or(0.0);
+
+                                    samples.push(UsageSample {
+                                        timestamp: std::time::Instant::now(),
+                                        primary_used,
+                                        secondary_used,
+                                        code_review_used,
+                                    });
+
+                                    if samples.len() > 30 {
+                                        samples.remove(0);
+                                    }
+
+                                    print_watch_usage(&usage, &samples);
+                                }
+                                Err(e) => {
+                                    eprintln!("Error fetching usage: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                println!("No active account. Run 'codex login' first.");
+            }
+        } else {
+            for account_name in &accounts_to_check {
+                let account_auth_path = get_account_auth_path(config_dir, account_name);
+                let auth = load_codex_auth(&account_auth_path)?;
+
+                if let Some(auth) = auth {
+                    if let Some(tokens) = auth.tokens {
+                        if let (Some(access_token), Some(account_id)) =
+                            (&tokens.access_token, &tokens.account_id)
+                        {
+                            match fetch_usage(access_token, account_id) {
+                                Ok(mut usage) => {
+                                    usage.account_name = account_name.clone();
+                                    let primary_used = usage
+                                        .primary_window
+                                        .as_ref()
+                                        .map(|w| w.used_percent)
+                                        .unwrap_or(0.0);
+                                    let secondary_used = usage
+                                        .secondary_window
+                                        .as_ref()
+                                        .map(|w| w.used_percent)
+                                        .unwrap_or(0.0);
+                                    let code_review_used = usage
+                                        .code_review
+                                        .as_ref()
+                                        .map(|w| w.used_percent)
+                                        .unwrap_or(0.0);
+
+                                    samples.push(UsageSample {
+                                        timestamp: std::time::Instant::now(),
+                                        primary_used,
+                                        secondary_used,
+                                        code_review_used,
+                                    });
+
+                                    if samples.len() > 30 {
+                                        samples.remove(0);
+                                    }
+
+                                    print_watch_usage(&usage, &samples);
+                                }
+                                Err(e) => {
+                                    eprintln!("Error fetching usage for {}: {}", account_name, e);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        std::thread::sleep(interval);
+    }
+
+    Ok(())
+}
+
+fn print_watch_usage(usage: &UsageData, samples: &[UsageSample]) {
+    let burn_stats = calculate_burn_rate(samples);
+
+    println!("\n{}", usage.account_name);
+    println!("{}", "-".repeat(40));
+
+    if let Some(pw) = &usage.primary_window {
+        let burn_str = burn_stats
+            .as_ref()
+            .map(|b| {
+                format!(
+                    " (burn: {})",
+                    format_burn_rate(b.primary_burn, b.primary_stddev)
+                )
+            })
+            .unwrap_or_default();
+        println!("  {} Window:", pw.window);
+        println!(
+            "    {}  {:.1}% remaining{}",
+            print_progress_bar(pw.remaining_percent, 10),
+            pw.remaining_percent,
+            burn_str
+        );
+        if let Some(reset) = &pw.resets_in {
+            println!("    Resets in: {}", reset);
+        }
+    }
+
+    if let Some(sw) = &usage.secondary_window {
+        let burn_str = burn_stats
+            .as_ref()
+            .map(|b| {
+                format!(
+                    " (burn: {})",
+                    format_burn_rate(b.secondary_burn, b.secondary_stddev)
+                )
+            })
+            .unwrap_or_default();
+        println!("  {} Window:", sw.window);
+        println!(
+            "    {}  {:.1}% remaining{}",
+            print_progress_bar(sw.remaining_percent, 10),
+            sw.remaining_percent,
+            burn_str
+        );
+        if let Some(reset) = &sw.resets_in {
+            println!("    Resets in: {}", reset);
+        }
+    }
+
+    if let Some(cr) = &usage.code_review {
+        let burn_str = burn_stats
+            .as_ref()
+            .map(|b| {
+                format!(
+                    " (burn: {})",
+                    format_burn_rate(b.code_review_burn, b.code_review_stddev)
+                )
+            })
+            .unwrap_or_default();
+        println!("  Code Review:");
+        println!(
+            "    {}  {:.1}% used{}",
+            print_progress_bar(cr.used_percent, 10),
+            cr.used_percent,
+            burn_str
+        );
+    }
+
+    if usage.limit_reached {
+        println!("  ⚠️  Rate limit reached!");
+    }
+}
+
 fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()> {
     let config = load_config(config_dir)?;
 
@@ -1355,6 +1725,13 @@ fn main() -> Result<()> {
                 }
             },
         },
+        Commands::Watch {
+            interval,
+            all,
+            refresh,
+        } => {
+            cmd_status_watch(&config_dir, &interval, all, refresh)?;
+        }
     }
 
     Ok(())
