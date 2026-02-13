@@ -209,6 +209,7 @@ pub struct Config {
 pub struct AccountInfo {
     pub added_at: String,
     pub last_used: Option<String>,
+    pub auth_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -241,6 +242,12 @@ pub struct CodexAuth {
     #[allow(dead_code)]
     pub api_key: Option<String>,
     pub tokens: Option<CodexTokens>,
+    pub user: Option<CodexUser>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CodexUser {
+    pub email: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -252,6 +259,7 @@ pub struct CodexTokens {
 #[derive(Debug, Serialize, Clone)]
 pub struct UsageData {
     pub account_name: String,
+    pub email: Option<String>,
     pub status: String,
     pub plan: Option<String>,
     pub primary_window: Option<RateWindow>,
@@ -451,17 +459,33 @@ pub fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
         );
     }
 
+    let auth_content = fs::read_to_string(&codex_auth)?;
+    let auth_hash = format!("{:x}", md5::compute(auth_content.as_bytes()));
+
+    let mut config = load_config(config_dir)?;
+
+    for (existing_name, info) in &config.accounts {
+        if let Some(existing_hash) = &info.auth_hash {
+            if existing_hash == &auth_hash {
+                anyhow::bail!(
+                    "This account has already been added as '{}'. Use 'codex-usage accounts switch {}' to switch to it.",
+                    existing_name, existing_name
+                );
+            }
+        }
+    }
+
     let account_auth_path = get_account_auth_path(config_dir, name);
     let accounts_dir = get_accounts_dir(config_dir);
     fs::create_dir_all(&accounts_dir).context("Failed to create accounts directory")?;
     copy_auth_file(&codex_auth, &account_auth_path)?;
 
-    let mut config = load_config(config_dir)?;
     config.accounts.insert(
         name.to_string(),
         AccountInfo {
             added_at: chrono::Utc::now().to_rfc3339(),
             last_used: None,
+            auth_hash: Some(auth_hash),
         },
     );
     save_config(config_dir, &config)?;
@@ -537,9 +561,14 @@ fn format_reset_time(seconds: u64) -> String {
     }
 }
 
-fn parse_usage_response(data: serde_json::Value, account_name: &str) -> UsageData {
+fn parse_usage_response(
+    data: serde_json::Value,
+    account_name: &str,
+    email: Option<String>,
+) -> UsageData {
     let mut usage = UsageData {
         account_name: account_name.to_string(),
+        email,
         status: "ok".to_string(),
         plan: None,
         primary_window: None,
@@ -628,7 +657,7 @@ fn parse_usage_response(data: serde_json::Value, account_name: &str) -> UsageDat
     usage
 }
 
-fn fetch_usage(access_token: &str, account_id: &str) -> Result<UsageData> {
+fn fetch_usage(access_token: &str, account_id: &str, email: Option<String>) -> Result<UsageData> {
     let client = reqwest::blocking::Client::new();
     let response = client
         .get(USAGE_API_URL)
@@ -646,7 +675,7 @@ fn fetch_usage(access_token: &str, account_id: &str) -> Result<UsageData> {
     }
 
     let data: serde_json::Value = response.json().context("Failed to parse response")?;
-    Ok(parse_usage_response(data, "current"))
+    Ok(parse_usage_response(data, "current", email))
 }
 
 fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
@@ -682,6 +711,10 @@ fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();
+    let email = data
+        .get("email")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let status = data
         .get("status")
         .and_then(|v| v.as_str())
@@ -733,6 +766,7 @@ fn get_cached_usage(config_dir: &Path) -> Option<UsageData> {
 
     Some(UsageData {
         account_name,
+        email,
         status,
         plan,
         primary_window,
@@ -799,6 +833,7 @@ pub fn cmd_status(
                     if let (Some(access_token), Some(account_id)) =
                         (&tokens.access_token, &tokens.account_id)
                     {
+                        let email = auth.user.and_then(|u| u.email);
                         if !refresh {
                             if let Some(cached) = get_cached_usage(config_dir) {
                                 if json {
@@ -806,13 +841,13 @@ pub fn cmd_status(
                                 } else if oneline {
                                     print_oneline(&cached);
                                 } else {
-                                    print_usage(&cached);
+                                    print_usage(&cached, true);
                                 }
                                 return Ok(());
                             }
                         }
 
-                        match fetch_usage(access_token, account_id) {
+                        match fetch_usage(access_token, account_id, email) {
                             Ok(usage) => {
                                 let _ = save_cache(config_dir, &usage);
                                 if json {
@@ -820,7 +855,7 @@ pub fn cmd_status(
                                 } else if oneline {
                                     print_oneline(&usage);
                                 } else {
-                                    print_usage(&usage);
+                                    print_usage(&usage, true);
                                 }
                                 return Ok(());
                             }
@@ -848,6 +883,7 @@ pub fn cmd_status(
                 if let (Some(access_token), Some(account_id)) =
                     (&tokens.access_token, &tokens.account_id)
                 {
+                    let email = auth.user.and_then(|u| u.email);
                     if !refresh {
                         if let Some(cached) = get_cached_usage(config_dir) {
                             if cached.account_name == *account_name {
@@ -857,7 +893,7 @@ pub fn cmd_status(
                         }
                     }
 
-                    match fetch_usage(access_token, account_id) {
+                    match fetch_usage(access_token, account_id, email) {
                         Ok(mut usage) => {
                             usage.account_name = account_name.clone();
                             let _ = save_cache(config_dir, &usage);
@@ -887,18 +923,25 @@ pub fn cmd_status(
             print_oneline(usage);
         }
     } else {
-        for usage in &all_usages {
-            print_usage(usage);
-            println!();
+        for (i, account_name) in accounts_to_check.iter().enumerate() {
+            let is_current = config.active_account.as_deref() == Some(account_name.as_str());
+            if let Some(usage) = all_usages.get(i) {
+                print_usage(usage, is_current);
+                println!();
+            }
         }
     }
 
     Ok(())
 }
 
-fn print_usage(usage: &UsageData) {
+fn print_usage(usage: &UsageData, is_current: bool) {
+    let current_marker = if is_current { " *" } else { "" };
     println!("{}", "=".repeat(50));
-    println!("  {}", usage.account_name);
+    println!("  {}{}", usage.account_name, current_marker);
+    if let Some(email) = &usage.email {
+        println!("  📧 {}", email);
+    }
     println!("{}", "=".repeat(50));
 
     println!("  🔑 Auth: {}", usage.auth_type);
@@ -1169,7 +1212,8 @@ pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
             if let (Some(access_token), Some(account_id)) =
                 (&tokens.access_token, &tokens.account_id)
             {
-                let usage = fetch_usage(access_token, account_id)?;
+                let email = auth.user.and_then(|u| u.email);
+                let usage = fetch_usage(access_token, account_id, email)?;
 
                 let (should_switch, reason) = should_cycle(&usage, &cycle_config);
 
