@@ -121,7 +121,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
-          path: target/${{ matrix.target }}/release/${{ matrix.binary_name }}
+          path: target/${{ matrix.target }}/release/codex-usage
 
   publish:
     name: Publish Release
@@ -139,11 +139,11 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            artifacts/macos-x64/*
-            artifacts/macos-arm64/*
-            artifacts/linux-x64/*
-            artifacts/linux-arm64/*
-            artifacts/windows-x64/*
+            artifacts/macos-x64/codex-usage
+            artifacts/macos-arm64/codex-usage
+            artifacts/linux-x64/codex-usage
+            artifacts/linux-arm64/codex-usage
+            artifacts/windows-x64/codex-usage.exe
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
