@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[cfg(feature = "pyo3")]
-use pyo3::{prelude::*, types::PyModule};
+use pyo3::{prelude::*, types::PyModule, wrap_pyfunction};
 
 #[cfg(feature = "pyo3")]
 #[pymodule]
-fn codex_usage(m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn codex_usage(m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_py, m)?)?;
     Ok(())
 }
@@ -313,7 +313,18 @@ pub fn get_accounts_dir(config_dir: &Path) -> PathBuf {
 }
 
 pub fn get_account_auth_path(config_dir: &Path, name: &str) -> PathBuf {
-    get_accounts_dir(config_dir).join(name).join("auth.json")
+    let sanitized = sanitize_account_name(name);
+    get_accounts_dir(config_dir)
+        .join(&sanitized)
+        .join("auth.json")
+}
+
+fn sanitize_account_name(name: &str) -> String {
+    let sanitized = name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+    if sanitized.contains("..") || sanitized.starts_with('/') || sanitized.starts_with('\\') {
+        panic!("Invalid account name: {}", name);
+    }
+    sanitized
 }
 
 pub fn get_config_path(config_dir: &Path) -> PathBuf {
@@ -416,7 +427,13 @@ fn is_codex_running() -> bool {
                 }
                 #[cfg(windows)]
                 {
-                    return true;
+                    use sysinfo::System;
+                    let mut sys = System::new();
+                    sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+                    if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid)) {
+                        return process.status() != sysinfo::ProcessStatus::Run;
+                    }
+                    false
                 }
             }
         }
@@ -479,17 +496,21 @@ pub fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
     }
 
     let auth_content = fs::read_to_string(&codex_auth)?;
-    let auth_hash = format!("{:x}", Sha256::digest(auth_content.as_bytes()));
+    let auth_digest = Sha256::digest(auth_content.as_bytes());
+    let auth_hash = format!("{:x}", auth_digest);
 
     let mut config = load_config(config_dir)?;
 
     for (existing_name, info) in &config.accounts {
         if let Some(existing_hash) = &info.auth_hash {
-            if existing_hash == &auth_hash {
-                anyhow::bail!(
-                    "This account has already been added as '{}'. Use 'codex-usage accounts switch {}' to switch to it.",
-                    existing_name, existing_name
-                );
+            if let Ok(existing_digest) = hex::decode(existing_hash) {
+                use std::cmp::Ordering;
+                if auth_digest.as_slice().cmp(&existing_digest) == Ordering::Equal {
+                    anyhow::bail!(
+                        "This account has already been added as '{}'. Use 'codex-usage accounts switch {}' to switch to it.",
+                        existing_name, existing_name
+                    );
+                }
             }
         }
     }
@@ -675,6 +696,7 @@ fn fetch_usage(
     client: &reqwest::blocking::Client,
     access_token: &str,
     account_id: &str,
+    account_name: &str,
 ) -> Result<UsageData> {
     let response = client
         .get(USAGE_API_URL)
@@ -692,7 +714,7 @@ fn fetch_usage(
     }
 
     let data: serde_json::Value = response.json().context("Failed to parse response")?;
-    Ok(parse_usage_response(data, "current"))
+    Ok(parse_usage_response(data, account_name))
 }
 
 fn get_cached_usage(config_dir: &Path, account_name: &str) -> Option<UsageData> {
@@ -804,7 +826,7 @@ pub fn cmd_status(
                             .active_account
                             .clone()
                             .unwrap_or_else(|| "default".to_string());
-                        match fetch_usage(&client, access_token, account_id) {
+                        match fetch_usage(&client, access_token, account_id, &default_account) {
                             Ok(usage) => {
                                 let _ = save_cache(config_dir, &usage, &default_account);
                                 if json {
@@ -850,7 +872,7 @@ pub fn cmd_status(
                         }
                     }
 
-                    match fetch_usage(&client, access_token, account_id) {
+                    match fetch_usage(&client, access_token, account_id, account_name) {
                         Ok(mut usage) => {
                             usage.account_name = account_name.clone();
                             let _ = save_cache(config_dir, &usage, account_name);
@@ -1182,7 +1204,7 @@ pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
             if let (Some(access_token), Some(account_id)) =
                 (&tokens.access_token, &tokens.account_id)
             {
-                let usage = fetch_usage(&client, access_token, account_id)?;
+                let usage = fetch_usage(&client, access_token, account_id, current)?;
 
                 let (should_switch, reason) = should_cycle(&usage, &cycle_config);
 
@@ -1234,8 +1256,16 @@ pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
                 } else {
                     println!("No cycle needed (thresholds not met: {})", reason);
                 }
+            } else {
+                anyhow::bail!("Missing access_token or account_id for current account. Cannot fetch usage for cycling.");
             }
+        } else {
+            anyhow::bail!(
+                "No tokens found in current account auth. Cannot fetch usage for cycling."
+            );
         }
+    } else {
+        anyhow::bail!("No auth data found for current account. Cannot fetch usage for cycling.");
     }
 
     Ok(())
