@@ -433,7 +433,7 @@ fn is_codex_running() -> bool {
                     if let Some(process) = sys.process(sysinfo::Pid::from_u32(pid)) {
                         return process.status() != sysinfo::ProcessStatus::Run;
                     }
-                    false
+                    return false;
                 }
             }
         }
