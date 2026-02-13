@@ -76,9 +76,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - platform: macos-x64
+            target: x86_64-apple-darwin
+            runs-on: macos-13
+            binary_name: codex-usage-x86_64-apple-darwin
+          - platform: macos-arm64
+            target: aarch64-apple-darwin
+            runs-on: macos-latest
+            binary_name: codex-usage-aarch64-apple-darwin
           - platform: linux-x64
             target: x86_64-unknown-linux-gnu
             runs-on: ubuntu-latest
+            binary_name: codex-usage-x86_64-unknown-linux-gnu
+          - platform: linux-arm64
+            target: aarch64-unknown-linux-gnu
+            runs-on: ubuntu-latest
+            binary_name: codex-usage-aarch64-unknown-linux-gnu
+          - platform: windows-x64
+            target: x86_64-pc-windows-msvc
+            runs-on: windows-latest
+            binary_name: codex-usage.exe
 
     steps:
       - name: Checkout
@@ -93,68 +110,61 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package
-        run: |
-          mkdir -p release
-          mkdir -p "codex-usage-${{ matrix.platform }}"
-          cp "target/${{ matrix.target }}/release/codex-usage" "./codex-usage-${{ matrix.platform }}/codex-usage"
-          chmod +x "./codex-usage-${{ matrix.platform }}/codex-usage"
-          tar -czvf "release/codex-usage-${{ matrix.platform }}.tar.gz" "codex-usage-${{ matrix.platform }}"
-
       - name: Upload Release Asset
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: release/*
+          files: |
+            target/${{ matrix.target }}/release/${{ matrix.binary_name }}
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  packages:
-    name: Packages (RPM/DEB)
-    needs: release
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            target: x86_64-unknown-linux-gnu
-            rust_arch: x86_64
+  # packages:
+  #   name: Packages (RPM/DEB)
+  #   needs: release
+  #   if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  #   runs-on: ubuntu-latest
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       include:
+  #         - arch: amd64
+  #           target: x86_64-unknown-linux-gnu
+  #           rust_arch: x86_64
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v4
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-          target: ${{ matrix.target }}
+  #     - name: Set up Rust
+  #       uses: dtolnay/rust-toolchain@master
+  #       with:
+  #         toolchain: stable
+  #         target: ${{ matrix.target }}
 
-      - name: Install packaging tools
-        run: sudo apt-get update && sudo apt-get install -y dpkg-dev rpm
+  #     - name: Install packaging tools
+  #       run: sudo apt-get update && sudo apt-get install -y dpkg-dev rpm
 
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+  #     - name: Build
+  #       run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Create DEB package
-        run: bash scripts/build-deb.sh "${{ matrix.arch }}" "${{ matrix.target }}" "${{ github.ref_name }}"
-        working-directory: ${{ github.workspace }}
+  #     - name: Create DEB package
+  #       run: bash scripts/build-deb.sh "${{ matrix.arch }}" "${{ matrix.target }}" "${{ github.ref_name }}"
+  #       working-directory: ${{ github.workspace }}
 
-      - name: Create RPM package
-        run: bash scripts/build-rpm.sh "${{ matrix.arch }}" "${{ matrix.target }}" "${{ matrix.rust_arch }}" "${{ github.ref_name }}"
-        working-directory: ${{ github.workspace }}
+  #     - name: Create RPM package
+  #       run: bash scripts/build-rpm.sh "${{ matrix.arch }}" "${{ matrix.target }}" "${{ matrix.rust_arch }}" "${{ github.ref_name }}"
+  #       working-directory: ${{ github.workspace }}
 
-      - name: Upload Package Assets
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.ref_name }}
-          files: release/*.deb release/*.rpm
-          draft: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  #     - name: Upload Package Assets
+  #       uses: softprops/action-gh-release@v1
+  #       with:
+  #         tag_name: ${{ github.ref_name }}
+  #         files: release/*.deb release/*.rpm
+  #         draft: true
+  #       env:
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # source:
   #   name: Source Tarball
