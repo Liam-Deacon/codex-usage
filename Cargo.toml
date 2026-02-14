@@ -1,6 +1,6 @@
 [package]
 name = "codex-usage"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "CLI tool to track OpenAI Codex usage with multi-account support"
 authors = ["Liam Deacon <liam@deacon.dev>"]
