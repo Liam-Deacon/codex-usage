@@ -146,7 +146,7 @@ jobs:
           path: artifacts
 
       - name: List artifacts
-        run: ls -R artifacts
+        run: find artifacts -type f
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
