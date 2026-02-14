@@ -152,7 +152,12 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: artifacts/**/*
+          files: |
+            artifacts/macos-x64/*
+            artifacts/macos-arm64/*
+            artifacts/linux-x64/*
+            artifacts/linux-arm64/*
+            artifacts/windows-x64/*
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
