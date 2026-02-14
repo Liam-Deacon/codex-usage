@@ -44,12 +44,9 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            TARGETARCH=amd64
-            TARGETARCH=arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
