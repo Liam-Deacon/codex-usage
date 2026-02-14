@@ -42,6 +42,13 @@ scoop install codex-usage
 uvx codex-usage --help
 ```
 
+### Docker
+
+```bash
+docker pull ghcr.io/liam-deacon/codex-usage:latest
+docker run --rm ghcr.io/liam-deacon/codex-usage:latest --help
+```
+
 ### Build from Source
 
 ```bash
@@ -138,17 +145,84 @@ codex-usage cycle reorder account1 account2 account3
 Trigger Codex to utilize daily/weekly limits:
 
 ```bash
-# Wakeup active account
-codex-usage wakeup run
+# Run wakeup now
+codex-usage wakeup --run
 
-# Wakeup all accounts (sequential)
-codex-usage wakeup run --all
+# Run wakeup for specific account
+codex-usage wakeup --run --account myaccount
 
-# Configure wakeup
-codex-usage wakeup config --prompt "hi" --timeout 30
+# Force wake even if Codex is running
+codex-usage wakeup --run --force
 
-# Install to scheduler
-codex-usage wakeup install --interval 60
+# Install wakeup schedule (e.g., daily at 8am and 2pm)
+codex-usage wakeup install --at 08:00 --at 14:00
+
+# Install with interval between --at times
+codex-usage wakeup install --at 08:00 --interval 1h
+
+# List current wakeup schedules
+codex-usage wakeup list
+
+# Remove wakeup schedule
+codex-usage wakeup remove
+
+# Attempt to wake system from sleep (macOS)
+codex-usage wakeup --run --wake-system
+```
+
+### Watch
+
+Continuously monitor usage with live updates:
+
+```bash
+# Watch active account (default 10s interval)
+codex-usage watch
+
+# Watch with custom interval
+codex-usage watch --interval 30s
+
+# Watch all accounts
+codex-usage watch --all
+
+# Force refresh on each poll (skip cache)
+codex-usage watch --refresh
+```
+
+### History
+
+Track and analyze usage over time:
+
+```bash
+# Manage background recording daemon
+codex-usage history daemon start --interval 5m
+codex-usage history daemon stop
+codex-usage history daemon status
+
+# Show usage history
+codex-usage history show
+codex-usage history show --period week
+codex-usage history show --from 2025-01-01 --to 2025-01-31
+codex-usage history show --account myaccount
+
+# Show terminal bar chart
+codex-usage history chart
+codex-usage history chart account1 account2
+
+# Show allowance analysis
+codex-usage history allowance
+codex-usage history allowance --projected
+codex-usage history allowance --dead-time
+
+# Configure notifications
+codex-usage history notify --enable
+codex-usage history notify --disable
+codex-usage history notify --hours-before 2
+codex-usage history notify --status
+
+# Export history data
+codex-usage history export
+codex-usage history export --output usage.json
+codex-usage history export --period month --format json
 ```
 
 ## Configuration

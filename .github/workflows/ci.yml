@@ -148,11 +148,11 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           files: |
-            artifacts/macos-x64/${{ matrix.binary_name }}
-            artifacts/macos-arm64/${{ matrix.binary_name }}
-            artifacts/linux-x64/${{ matrix.binary_name }}
-            artifacts/linux-arm64/${{ matrix.binary_name }}
-            artifacts/windows-x64/${{ matrix.binary_name }}
+            artifacts/macos-x64/codex-usage-x86_64-apple-darwin
+            artifacts/macos-arm64/codex-usage-aarch64-apple-darwin
+            artifacts/linux-x64/codex-usage-x86_64-unknown-linux-gnu
+            artifacts/linux-arm64/codex-usage-aarch64-unknown-linux-gnu
+            artifacts/windows-x64/codex-usage.exe
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
