@@ -16,9 +16,339 @@ use pyo3::{prelude::*, types::PyModule, wrap_pyfunction};
 
 #[cfg(feature = "pyo3")]
 #[pymodule]
-fn codex_usage(m: &PyModule) -> PyResult<()> {
+fn codex_usage(_py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_py, m)?)?;
+    m.add_function(wrap_pyfunction!(get_usage, m)?)?;
+    m.add_function(wrap_pyfunction!(list_accounts, m)?)?;
+    m.add_function(wrap_pyfunction!(switch_account, m)?)?;
+    m.add_function(wrap_pyfunction!(add_account, m)?)?;
+    m.add_function(wrap_pyfunction!(remove_account, m)?)?;
+    m.add_function(wrap_pyfunction!(get_cycle_config, m)?)?;
+    m.add_function(wrap_pyfunction!(set_cycle_config, m)?)?;
+    m.add_function(wrap_pyfunction!(cycle_enable, m)?)?;
+    m.add_function(wrap_pyfunction!(cycle_disable, m)?)?;
+    m.add_function(wrap_pyfunction!(cycle_now, m)?)?;
+    m.add_function(wrap_pyfunction!(get_cycle_status, m)?)?;
+    m.add_function(wrap_pyfunction!(get_config_dir, m)?)?;
     Ok(())
+}
+
+fn get_config_dir_default() -> PathBuf {
+    dirs::home_dir()
+        .map(|p| p.join(".codex-usage"))
+        .unwrap_or_else(|| PathBuf::from(".codex-usage"))
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn get_config_dir() -> String {
+    get_config_dir_default().to_string_lossy().to_string()
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn get_usage(
+    account: Option<String>,
+    config_dir: Option<String>,
+    refresh: Option<bool>,
+) -> PyResult<String> {
+    let refresh = refresh.unwrap_or(false);
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+
+    let config = load_config(&config_dir)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    let account_name = account.unwrap_or_else(|| {
+        config
+            .active_account
+            .clone()
+            .unwrap_or_else(|| "default".to_string())
+    });
+
+    let codex_auth_path = if config.accounts.contains_key(&account_name) {
+        get_account_auth_path(&config_dir, &account_name)
+    } else {
+        get_codex_auth_path()
+    };
+
+    let auth = load_codex_auth(&codex_auth_path)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    let tokens = match auth {
+        Some(a) => a.tokens,
+        None => {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "No auth found. Run 'codex login' first.",
+            ))
+        }
+    };
+
+    let tokens = match tokens {
+        Some(t) => t,
+        None => {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "No tokens found in auth",
+            ))
+        }
+    };
+
+    let access_token = match tokens.access_token {
+        Some(at) => at,
+        None => {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "Missing access_token",
+            ))
+        }
+    };
+
+    let account_id = match tokens.account_id {
+        Some(ai) => ai,
+        None => {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "Missing account_id",
+            ))
+        }
+    };
+
+    let usage = if !refresh {
+        get_cached_usage(&config_dir, &account_name)
+    } else {
+        None
+    };
+
+    let usage = match usage {
+        Some(u) => u,
+        None => {
+            let client = reqwest::blocking::Client::new();
+            let response = client
+                .get(USAGE_API_URL)
+                .header("Authorization", format!("Bearer {}", access_token))
+                .header("chatgpt-account-id", account_id)
+                .header("User-Agent", "codex-cli")
+                .header("Content-Type", "application/json")
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .map_err(|e| {
+                    pyo3::exceptions::PyRuntimeError::new_err(format!(
+                        "Failed to fetch usage: {}",
+                        e
+                    ))
+                })?;
+
+            if !response.status().is_success() {
+                return Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "API returned error: {}",
+                    response.status()
+                )));
+            }
+
+            let data: serde_json::Value = response.json().map_err(|e| {
+                pyo3::exceptions::PyRuntimeError::new_err(format!(
+                    "Failed to parse response: {}",
+                    e
+                ))
+            })?;
+            let mut usage = parse_usage_response(data, &account_name);
+            let _ = save_cache(&config_dir, &usage, &account_name);
+            usage
+        }
+    };
+
+    serde_json::to_string(&usage)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn list_accounts(config_dir: Option<String>) -> PyResult<String> {
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+
+    let config = load_config(&config_dir)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    let accounts: Vec<_> = config
+        .accounts
+        .iter()
+        .map(|(name, info)| {
+            serde_json::json!({
+                "name": name,
+                "active": config.active_account.as_deref() == Some(name),
+                "added_at": info.added_at,
+                "last_used": info.last_used
+            })
+        })
+        .collect();
+
+    serde_json::to_string(&accounts)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn switch_account(
+    name: String,
+    config_dir: Option<String>,
+    force: Option<bool>,
+) -> PyResult<String> {
+    let force = force.unwrap_or(false);
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+    cmd_accounts_switch(&config_dir, &name, force)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(format!("Switched to account '{}'", name))
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn add_account(name: String, config_dir: Option<String>) -> PyResult<String> {
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+    cmd_accounts_add(&config_dir, &name)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(format!("Added account '{}'", name))
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn remove_account(name: String, config_dir: Option<String>) -> PyResult<String> {
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+    cmd_accounts_remove(&config_dir, &name)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok(format!("Removed account '{}'", name))
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn get_cycle_config(config_dir: Option<String>) -> PyResult<String> {
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+
+    let cycle_config = load_cycle_config(&config_dir)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    let config = load_config(&config_dir)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    let accounts: Vec<&str> = if cycle_config.accounts.is_empty() {
+        config.accounts.keys().map(|s| s.as_str()).collect()
+    } else {
+        cycle_config.accounts.iter().map(|s| s.as_str()).collect()
+    };
+
+    let result = serde_json::json!({
+        "enabled": cycle_config.enabled,
+        "five_hour": cycle_config.thresholds.five_hour,
+        "weekly": cycle_config.thresholds.weekly,
+        "mode": cycle_config.mode,
+        "accounts": accounts,
+        "current_index": cycle_config.current_index,
+        "last_cycle": cycle_config.last_cycle
+    });
+
+    serde_json::to_string(&result)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn set_cycle_config(
+    config_dir: Option<String>,
+    five_hour: Option<f64>,
+    weekly: Option<f64>,
+    mode: Option<String>,
+) -> PyResult<String> {
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+    cmd_cycle_config(&config_dir, five_hour, weekly, mode)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok("Cycle configuration updated".to_string())
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn cycle_enable(config_dir: Option<String>) -> PyResult<String> {
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+    cmd_cycle_enable(&config_dir)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok("Cycling enabled".to_string())
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn cycle_disable(config_dir: Option<String>) -> PyResult<String> {
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+    cmd_cycle_disable(&config_dir)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok("Cycling disabled".to_string())
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn cycle_now(force: Option<bool>, config_dir: Option<String>) -> PyResult<String> {
+    let force = force.unwrap_or(false);
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+    cmd_cycle_now(&config_dir, force)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    Ok("Success".to_string())
+}
+
+#[cfg(feature = "pyo3")]
+#[pyfunction]
+fn get_cycle_status(config_dir: Option<String>) -> PyResult<String> {
+    let config_dir = config_dir
+        .map(PathBuf::from)
+        .unwrap_or_else(get_config_dir_default);
+
+    let cycle_config = load_cycle_config(&config_dir)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+    let config = load_config(&config_dir)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+    let accounts: Vec<_> = {
+        let accounts_to_use: Vec<String> = if cycle_config.accounts.is_empty() {
+            config.accounts.keys().cloned().collect()
+        } else {
+            cycle_config.accounts.clone()
+        };
+        accounts_to_use
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                serde_json::json!({
+                    "name": name,
+                    "is_current": config.active_account.as_deref() == Some(name),
+                    "is_next": i == cycle_config.current_index
+                })
+            })
+            .collect()
+    };
+
+    let result = serde_json::json!({
+        "enabled": cycle_config.enabled,
+        "five_hour_threshold": cycle_config.thresholds.five_hour,
+        "weekly_threshold": cycle_config.thresholds.weekly,
+        "mode": cycle_config.mode,
+        "accounts": accounts,
+        "last_cycle": cycle_config.last_cycle
+    });
+
+    serde_json::to_string(&result)
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
 #[cfg(feature = "pyo3")]
@@ -410,12 +740,6 @@ pub struct CodeReview {
 
 const USAGE_API_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const CACHE_TTL_SECS: u64 = 300;
-
-pub fn get_config_dir() -> PathBuf {
-    dirs::home_dir()
-        .map(|p| p.join(".codex-usage"))
-        .unwrap_or_else(|| PathBuf::from(".codex-usage"))
-}
 
 fn get_codex_dir() -> PathBuf {
     dirs::home_dir()
@@ -1452,7 +1776,7 @@ pub fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()>
 
 pub fn run_cli() -> Result<()> {
     let cli = Cli::parse();
-    let config_dir = cli.config_dir.unwrap_or_else(get_config_dir);
+    let config_dir = cli.config_dir.unwrap_or_else(get_config_dir_default);
 
     tracing_subscriber::fmt()
         .with_max_level(if cli.verbose {
