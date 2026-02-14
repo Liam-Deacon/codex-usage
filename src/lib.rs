@@ -1546,178 +1546,187 @@ pub fn run_cli() -> Result<()> {
                 }
             },
         },
-        Commands::History { command } => {
-            use crate::history::{HistoryDatabase, NotificationConfig};
-            let db = HistoryDatabase::new(&config_dir)?;
-
-            match command {
-                HistoryCommands::Daemon { command } => match command {
-                    DaemonCommands::Start { interval } => {
-                        println!("Starting daemon with interval {} - use 'codex-usage history daemon start --interval {}'", interval, interval);
-                        println!(
-                            "Daemon functionality requires the daemonize crate implementation"
-                        );
-                    }
-                    DaemonCommands::Stop => {
-                        println!("Stopping daemon...");
-                    }
-                    DaemonCommands::Status => {
-                        println!("Daemon status: not running");
-                    }
-                },
-                HistoryCommands::Show {
-                    period: _,
-                    from: _,
-                    to: _,
-                    account,
-                } => {
-                    let account_name = account.unwrap_or_else(|| "default".to_string());
-                    let snapshots = db.get_snapshots(&account_name, None, None, Some(100))?;
-
-                    if snapshots.is_empty() {
-                        println!("No history found for account '{}'.", account_name);
-                        println!("Start the daemon to begin recording usage history.");
-                        return Ok(());
-                    }
-
-                    println!("Usage History for {}:", account_name);
-                    println!("{}", "=".repeat(50));
-
-                    for snapshot in snapshots.iter().take(20) {
-                        let dt = chrono::DateTime::from_timestamp(snapshot.timestamp, 0)
-                            .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
-                            .unwrap_or_else(|| "unknown".to_string());
-
-                        println!("{}", dt);
-                        if let Some(p) = snapshot.five_hour_percent {
-                            println!("  5h window:  {:.1}% used", p);
-                        }
-                        if let Some(p) = snapshot.weekly_percent {
-                            println!("  Weekly:       {:.1}% used", p);
-                        }
-                        println!();
-                    }
+        Commands::History { command } => match command {
+            HistoryCommands::Daemon { command } => match command {
+                DaemonCommands::Start { interval } => {
+                    println!("Starting daemon with interval {} - use 'codex-usage history daemon start --interval {}'", interval, interval);
+                    println!("Daemon functionality requires the daemonize crate implementation");
                 }
-                HistoryCommands::Chart { accounts: _ } => {
-                    println!("Terminal chart visualization");
-                    println!("This feature requires ratatui integration.");
-                    let all_accounts = db.get_accounts()?;
-                    if all_accounts.is_empty() {
-                        println!("No history data available. Start the daemon to begin recording.");
-                    } else {
-                        println!("Available accounts: {:?}", all_accounts);
-                    }
+                DaemonCommands::Stop => {
+                    println!("Stopping daemon...");
                 }
-                HistoryCommands::Allowance {
-                    projected,
-                    dead_time,
-                    account,
-                } => {
-                    let account_name = account.unwrap_or_else(|| "default".to_string());
-                    let snapshots = db.get_snapshots(&account_name, None, None, None)?;
-
-                    if snapshots.is_empty() {
-                        println!("No history found for account '{}'.", account_name);
-                        return Ok(());
-                    }
-
-                    println!("Allowance Analysis for {}", account_name);
-                    println!("{}", "=".repeat(50));
-
-                    let total_snapshots = snapshots.len();
-                    if let Some(latest) = snapshots.first() {
-                        if let Some(weekly) = latest.weekly_percent {
-                            println!("Current weekly usage: {:.1}%", weekly);
-                        }
-                    }
-                    println!("Total snapshots recorded: {}", total_snapshots);
-
-                    if projected {
-                        println!(
-                            "\nProjection: Enable daemon for more data to generate projections."
-                        );
-                    }
-                    if dead_time {
-                        println!("\nDead time analysis: Enable daemon for more data.");
-                    }
+                DaemonCommands::Status => {
+                    println!("Daemon status: not running");
                 }
-                HistoryCommands::Notify {
-                    #[allow(unused_variables)]
-                    enable,
-                    disable,
-                    hours_before,
-                    status,
-                    account,
-                } => {
-                    let account_name = account.unwrap_or_else(|| "default".to_string());
+            },
+            HistoryCommands::Show {
+                period: _,
+                from: _,
+                to: _,
+                account,
+            } => {
+                use crate::history::HistoryDatabase;
+                let db = HistoryDatabase::new(&config_dir)?;
+                let account_name = account.unwrap_or_else(|| "default".to_string());
+                let snapshots = db.get_snapshots(&account_name, None, None, Some(100))?;
 
-                    if status {
-                        if let Some(config) = db.get_notification_config(&account_name)? {
-                            println!("Notification config for {}:", account_name);
-                            println!("  Enabled: {}", config.enabled);
-                            println!(
-                                "  Notify {} hours before reset",
-                                config.notify_before_reset_hours
-                            );
-                            if let Some(ts) = config.last_notified {
-                                let dt = chrono::DateTime::from_timestamp(ts, 0)
-                                    .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
-                                    .unwrap_or_else(|| "unknown".to_string());
-                                println!("  Last notified: {}", dt);
-                            }
-                        } else {
-                            println!(
-                                "No notification config for {}. Use --enable to configure.",
-                                account_name
-                            );
-                        }
-                        return Ok(());
-                    }
-
-                    let enabled = enable || !disable;
-                    let config = NotificationConfig {
-                        id: None,
-                        account_name: account_name.clone(),
-                        notify_before_reset_hours: hours_before.unwrap_or(12),
-                        enabled,
-                        last_notified: None,
-                    };
-                    db.set_notification_config(&config)?;
-
-                    if !enabled {
-                        println!("Notifications disabled for {}.", account_name);
-                    } else {
-                        println!(
-                            "Notifications enabled for {} (notify {} hours before reset).",
-                            account_name, config.notify_before_reset_hours
-                        );
-                    }
+                if snapshots.is_empty() {
+                    println!("No history found for account '{}'.", account_name);
+                    println!("Start the daemon to begin recording usage history.");
+                    return Ok(());
                 }
-                HistoryCommands::Export {
-                    output,
-                    format: _,
-                    period,
-                    from,
-                    to,
-                } => {
-                    let export_data = serde_json::json!({
-                        "exported_at": chrono::Utc::now().to_rfc3339(),
-                        "period": period,
-                        "from": from,
-                        "to": to,
-                    });
 
-                    let json_str = serde_json::to_string_pretty(&export_data)?;
+                println!("Usage History for {}:", account_name);
+                println!("{}", "=".repeat(50));
 
-                    if let Some(path) = output {
-                        fs::write(&path, &json_str)?;
-                        println!("Exported to {}", path);
-                    } else {
-                        println!("{}", json_str);
+                for snapshot in snapshots.iter().take(20) {
+                    let dt = chrono::DateTime::from_timestamp(snapshot.timestamp, 0)
+                        .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                        .unwrap_or_else(|| "unknown".to_string());
+
+                    println!("{}", dt);
+                    if let Some(p) = snapshot.five_hour_percent {
+                        println!("  5h window:  {:.1}% used", p);
                     }
+                    if let Some(p) = snapshot.weekly_percent {
+                        println!("  Weekly:       {:.1}% used", p);
+                    }
+                    println!();
                 }
             }
-        }
+            HistoryCommands::Chart { accounts } => {
+                use crate::history::HistoryDatabase;
+                let db = HistoryDatabase::new(&config_dir)?;
+                println!("Terminal chart visualization");
+                println!("This feature requires ratatui integration.");
+                let all_accounts = db.get_accounts()?;
+
+                let accounts_to_show = if accounts.is_empty() {
+                    all_accounts.clone()
+                } else {
+                    all_accounts
+                        .into_iter()
+                        .filter(|a| accounts.contains(a))
+                        .collect()
+                };
+
+                if accounts_to_show.is_empty() {
+                    println!("No history data available for the specified accounts. Start the daemon to begin recording.");
+                } else {
+                    println!("Available accounts: {:?}", accounts_to_show);
+                }
+            }
+            HistoryCommands::Allowance {
+                projected,
+                dead_time,
+                account,
+            } => {
+                use crate::history::HistoryDatabase;
+                let db = HistoryDatabase::new(&config_dir)?;
+                let account_name = account.unwrap_or_else(|| "default".to_string());
+                let snapshots = db.get_snapshots(&account_name, None, None, None)?;
+
+                if snapshots.is_empty() {
+                    println!("No history found for account '{}'.", account_name);
+                    return Ok(());
+                }
+
+                println!("Allowance Analysis for {}", account_name);
+                println!("{}", "=".repeat(50));
+
+                let total_snapshots = snapshots.len();
+                if let Some(latest) = snapshots.first() {
+                    if let Some(weekly) = latest.weekly_percent {
+                        println!("Current weekly usage: {:.1}%", weekly);
+                    }
+                }
+                println!("Total snapshots recorded: {}", total_snapshots);
+
+                if projected {
+                    println!("\nProjection: Enable daemon for more data to generate projections.");
+                }
+                if dead_time {
+                    println!("\nDead time analysis: Enable daemon for more data.");
+                }
+            }
+            HistoryCommands::Notify {
+                #[allow(unused_variables)]
+                enable,
+                disable,
+                hours_before,
+                status,
+                account,
+            } => {
+                use crate::history::{HistoryDatabase, NotificationConfig};
+                let db = HistoryDatabase::new(&config_dir)?;
+                let account_name = account.unwrap_or_else(|| "default".to_string());
+
+                if status {
+                    if let Some(config) = db.get_notification_config(&account_name)? {
+                        println!("Notification config for {}:", account_name);
+                        println!("  Enabled: {}", config.enabled);
+                        println!(
+                            "  Notify {} hours before reset",
+                            config.notify_before_reset_hours
+                        );
+                        if let Some(ts) = config.last_notified {
+                            let dt = chrono::DateTime::from_timestamp(ts, 0)
+                                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                                .unwrap_or_else(|| "unknown".to_string());
+                            println!("  Last notified: {}", dt);
+                        }
+                    } else {
+                        println!(
+                            "No notification config for {}. Use --enable to configure.",
+                            account_name
+                        );
+                    }
+                    return Ok(());
+                }
+
+                let enabled = enable || !disable;
+                let config = NotificationConfig {
+                    id: None,
+                    account_name: account_name.clone(),
+                    notify_before_reset_hours: hours_before.unwrap_or(12),
+                    enabled,
+                    last_notified: None,
+                };
+                db.set_notification_config(&config)?;
+
+                if !enabled {
+                    println!("Notifications disabled for {}.", account_name);
+                } else {
+                    println!(
+                        "Notifications enabled for {} (notify {} hours before reset).",
+                        account_name, config.notify_before_reset_hours
+                    );
+                }
+            }
+            HistoryCommands::Export {
+                output,
+                format: _,
+                period,
+                from,
+                to,
+            } => {
+                let export_data = serde_json::json!({
+                    "exported_at": chrono::Utc::now().to_rfc3339(),
+                    "period": period,
+                    "from": from,
+                    "to": to,
+                });
+
+                let json_str = serde_json::to_string_pretty(&export_data)?;
+
+                if let Some(path) = output {
+                    fs::write(&path, &json_str)?;
+                    println!("Exported to {}", path);
+                } else {
+                    println!("{}", json_str);
+                }
+            }
+        },
     }
 
     Ok(())
