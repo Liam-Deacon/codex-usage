@@ -149,19 +149,14 @@ jobs:
       - name: List artifacts
         run: |
           find artifacts -type f
-          echo "---"
-          ls -la artifacts/
+          echo "---Files to upload---"
+          ls artifacts/
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          files: |
-            artifacts/macos-x64/*
-            artifacts/macos-arm64/*
-            artifacts/linux-x64/*
-            artifacts/linux-arm64/*
-            artifacts/windows-x64/*
+          files: artifacts/*
           draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
