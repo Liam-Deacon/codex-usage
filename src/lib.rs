@@ -1547,7 +1547,6 @@ pub fn run_cli() -> Result<()> {
             },
         },
         Commands::History { command } => {
-            #[allow(dead_code)]
             use crate::history::{HistoryDatabase, NotificationConfig};
             let db = HistoryDatabase::new(&config_dir)?;
 

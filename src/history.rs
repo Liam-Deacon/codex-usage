@@ -77,7 +77,10 @@ impl HistoryDatabase {
 
     #[allow(dead_code)]
     pub fn insert_snapshot(&self, snapshot: &UsageSnapshot) -> Result<i64> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
         conn.execute(
             "INSERT INTO usage_snapshots (account_name, timestamp, five_hour_percent, weekly_percent, weekly_reset_timestamp, five_hour_reset_timestamp, plan, status)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
@@ -102,7 +105,10 @@ impl HistoryDatabase {
         to_timestamp: Option<i64>,
         limit: Option<i64>,
     ) -> Result<Vec<UsageSnapshot>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
         let mut sql = String::from("SELECT id, account_name, timestamp, five_hour_percent, weekly_percent, weekly_reset_timestamp, five_hour_reset_timestamp, plan, status FROM usage_snapshots WHERE account_name = ?1");
 
         let from_param = from_timestamp.as_ref();
@@ -206,7 +212,10 @@ impl HistoryDatabase {
         &self,
         account_name: &str,
     ) -> Result<Option<NotificationConfig>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
         let mut stmt = conn.prepare(
             "SELECT id, account_name, notify_before_reset_hours, enabled, last_notified FROM notification_config WHERE account_name = ?1"
         )?;
@@ -226,7 +235,10 @@ impl HistoryDatabase {
     }
 
     pub fn set_notification_config(&self, config: &NotificationConfig) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
         conn.execute(
             "INSERT OR REPLACE INTO notification_config (account_name, notify_before_reset_hours, enabled, last_notified)
              VALUES (?1, ?2, ?3, ?4)",
@@ -242,7 +254,10 @@ impl HistoryDatabase {
 
     #[allow(dead_code)]
     pub fn update_last_notified(&self, account_name: &str) -> Result<()> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
         let now = Utc::now().timestamp();
         conn.execute(
             "UPDATE notification_config SET last_notified = ?1 WHERE account_name = ?2",
@@ -253,7 +268,10 @@ impl HistoryDatabase {
 
     #[allow(dead_code)]
     pub fn get_all_notification_configs(&self) -> Result<Vec<NotificationConfig>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
         let mut stmt = conn.prepare(
             "SELECT id, account_name, notify_before_reset_hours, enabled, last_notified FROM notification_config WHERE enabled = 1"
         )?;
@@ -276,7 +294,10 @@ impl HistoryDatabase {
     }
 
     pub fn get_accounts(&self) -> Result<Vec<String>> {
-        let conn = self.conn.lock().unwrap();
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|e| anyhow::anyhow!("lock poisoned: {}", e))?;
         let mut stmt = conn
             .prepare("SELECT DISTINCT account_name FROM usage_snapshots ORDER BY account_name")?;
         let rows = stmt.query_map([], |row| row.get(0))?;
