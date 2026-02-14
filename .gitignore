@@ -1,7 +1,6 @@
 # Build
 /target/
 **/target/
-Cargo.lock
 
 # Release artifacts
 /release/

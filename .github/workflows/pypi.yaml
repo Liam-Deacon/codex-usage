@@ -10,11 +10,10 @@ permissions:
 
 jobs:
   build-wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build wheels (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
         include:
           - os: ubuntu-latest
             target: x86_64-manylinux
@@ -23,24 +22,35 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
-            target: arm64-apple-darwin
+            target: aarch64-apple-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
 
+      - name: Patch version from release tag
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          echo "Patching Cargo.toml to version $VERSION"
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          rm -f Cargo.toml.bak
+          grep '^version' Cargo.toml
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --interpreter python3 --features pyo3
+          args: --release --out dist --features pyo3
           maturin-version: "latest"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.os }}-${{ matrix.target }}
+          name: wheels-${{ matrix.target }}
           path: dist/*.whl
 
   build-sdist:
@@ -48,6 +58,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Patch version from release tag
+        if: github.event_name == 'release'
+        shell: bash
+        run: |
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          rm -f Cargo.toml.bak
 
       - name: Build sdist
         uses: PyO3/maturin-action@v1
