@@ -20,14 +20,20 @@ This triggers the following chain:
    - Builds release binaries for 5 platform targets
    - Packages as `.tar.gz` (Unix) / `.zip` (Windows)
    - Creates a **published** GitHub Release with all artifacts
+   - Calls downstream workflows via `workflow_call` (see note below)
 
-2. **docker.yml** (on `release: published`):
+2. **docker.yml** (called by ci.yaml after publish):
    - Builds multi-arch Docker image (`linux/amd64`, `linux/arm64`)
    - Pushes to `ghcr.io/<owner>/codex-usage` with semver tags
 
-3. **pypi.yaml** (on `release: published`):
+3. **pypi.yaml** (called by ci.yaml after publish):
    - Builds wheels for all platforms + sdist
    - Publishes to TestPyPI, then PyPI (using trusted publishing)
+
+> **Note**: Docker and PyPI workflows are triggered via `workflow_call` from ci.yaml
+> rather than `release: published` events, because `GITHUB_TOKEN`-created events
+> don't trigger other workflows (GitHub Actions limitation). Both workflows also
+> support `workflow_dispatch` for manual runs.
 
 ## Platform Matrix
 

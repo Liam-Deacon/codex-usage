@@ -187,3 +187,25 @@ jobs:
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Downstream workflows called directly since GITHUB_TOKEN events
+  # don't trigger other workflows (GitHub Actions limitation)
+  docker:
+    name: Docker
+    needs: [publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/docker.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+
+  pypi-publish:
+    name: PyPI
+    needs: [publish]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/pypi.yaml
+    permissions:
+      contents: read
+      id-token: write
+    secrets: inherit
