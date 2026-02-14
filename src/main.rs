@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -12,6 +9,7 @@ use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+#[allow(dead_code)]
 mod history;
 mod schedule;
 
@@ -2088,7 +2086,8 @@ fn main() -> Result<()> {
                     }
                 }
                 HistoryCommands::Notify {
-                    enable: _,
+                    #[allow(unused_variables)]
+                    enable,
                     disable,
                     hours_before,
                     status,
@@ -2119,16 +2118,17 @@ fn main() -> Result<()> {
                         return Ok(());
                     }
 
+                    let enabled = enable || !disable;
                     let config = NotificationConfig {
                         id: None,
                         account_name: account_name.clone(),
                         notify_before_reset_hours: hours_before.unwrap_or(12),
-                        enabled: !disable,
+                        enabled,
                         last_notified: None,
                     };
                     db.set_notification_config(&config)?;
 
-                    if disable {
+                    if !enabled {
                         println!("Notifications disabled for {}.", account_name);
                     } else {
                         println!(
@@ -2139,13 +2139,20 @@ fn main() -> Result<()> {
                 }
                 HistoryCommands::Export {
                     output,
-                    format: _,
-                    period: _,
-                    from: _,
-                    to: _,
+                    #[allow(unused_variables)]
+                    format,
+                    #[allow(unused_variables)]
+                    period,
+                    #[allow(unused_variables)]
+                    from,
+                    #[allow(unused_variables)]
+                    to,
                 } => {
                     let export_data = serde_json::json!({
                         "exported_at": chrono::Utc::now().to_rfc3339(),
+                        "period": period,
+                        "from": from,
+                        "to": to,
                     });
 
                     let json_str = serde_json::to_string_pretty(&export_data)?;

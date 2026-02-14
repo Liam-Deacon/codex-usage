@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -1550,6 +1547,7 @@ pub fn run_cli() -> Result<()> {
             },
         },
         Commands::History { command } => {
+            #[allow(dead_code)]
             use crate::history::{HistoryDatabase, NotificationConfig};
             let db = HistoryDatabase::new(&config_dir)?;
 
@@ -1645,7 +1643,8 @@ pub fn run_cli() -> Result<()> {
                     }
                 }
                 HistoryCommands::Notify {
-                    enable: _,
+                    #[allow(unused_variables)]
+                    enable,
                     disable,
                     hours_before,
                     status,
@@ -1676,16 +1675,17 @@ pub fn run_cli() -> Result<()> {
                         return Ok(());
                     }
 
+                    let enabled = enable || !disable;
                     let config = NotificationConfig {
                         id: None,
                         account_name: account_name.clone(),
                         notify_before_reset_hours: hours_before.unwrap_or(12),
-                        enabled: !disable,
+                        enabled,
                         last_notified: None,
                     };
                     db.set_notification_config(&config)?;
 
-                    if disable {
+                    if !enabled {
                         println!("Notifications disabled for {}.", account_name);
                     } else {
                         println!(

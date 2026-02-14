@@ -1,6 +1,3 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
-
 use anyhow::{Context, Result};
 use chrono::Utc;
 use rusqlite::{params, Connection};
@@ -9,6 +6,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct UsageSnapshot {
     pub id: Option<i64>,
     pub account_name: String,
@@ -22,6 +20,7 @@ pub struct UsageSnapshot {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct NotificationConfig {
     pub id: Option<i64>,
     pub account_name: String,
@@ -30,6 +29,7 @@ pub struct NotificationConfig {
     pub last_notified: Option<i64>,
 }
 
+#[allow(dead_code)]
 pub struct HistoryDatabase {
     conn: Mutex<Connection>,
 }
