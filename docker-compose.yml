@@ -5,7 +5,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: liamdeacon/codex-usage:latest
+      args:
+        - TARGETARCH=amd64
+    image: ghcr.io/liam-deacon/codex-usage:latest
     container_name: codex-usage
     volumes:
       - ~/.codex:/home/appuser/.codex:ro
@@ -15,16 +17,3 @@ services:
       - CODEX_USAGE_VERBOSE=${CODEX_USAGE_VERBOSE:-false}
     profiles:
       - run
-
-  codex-usage-arm64:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: builder
-    image: liamdeacon/codex-usage:arm64
-    platform: linux/arm64
-    volumes:
-      - ~/.codex:/home/appuser/.codex:ro
-      - ~/.codex-usage:/home/appuser/.codex-usage
-    environment:
-      - CODEX_USAGE_DIR=/home/appuser/.codex-usage
