@@ -31,7 +31,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --interpreter python3
+          args: --release --out dist --interpreter python3 --features pyo3
           maturin-version: "latest"
 
       - name: Upload wheels
@@ -50,7 +50,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist
+          args: --out dist --features pyo3
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
