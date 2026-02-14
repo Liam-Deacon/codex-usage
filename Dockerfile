@@ -1,30 +1,22 @@
-FROM rust:1.75-alpine AS builder
+FROM rust:1.75-alpine
 
 RUN apk add --no-cache musl-dev
 
-WORKDIR /build
+WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
-ARG TARGETARCH
-RUN case "${TARGETARCH}" in \
-        amd64) cargo build --release --target x86_64-unknown-linux-musl ;; \
-        arm64) cargo build --release --target aarch64-unknown-linux-musl ;; \
-        *) cargo build --release ;; \
-    esac
+RUN cargo build --release
 
 FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates
 
-WORKDIR /app
-
-ARG TARGETARCH
-COPY --from=builder /build/target/${TARGETARCH}-unknown-linux-musl/release/codex-usage /usr/local/bin/codex-usage
+COPY --from=0 /app/target/release/codex-usage /usr/local/bin/codex-usage
 
 RUN adduser -D appuser && \
-    chown -R appuser:appuser /app
+    chown -R appuser:appuser /usr/local/bin/codex-usage
 
 USER appuser
 
