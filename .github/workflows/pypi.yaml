@@ -15,15 +15,15 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            target: x86_64-manylinux
+            target: x86_64
           - os: ubuntu-latest
-            target: aarch64-manylinux
+            target: aarch64
           - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
           - os: windows-latest
-            target: x86_64-pc-windows-msvc
+            target: x64
 
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +69,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           command: sdist
-          args: --out dist --features pyo3
+          args: --out dist
 
       - name: Upload sdist
         uses: actions/upload-artifact@v4
