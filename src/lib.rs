@@ -353,8 +353,10 @@ fn get_cycle_status(config_dir: Option<String>) -> PyResult<String> {
 
 #[cfg(feature = "pyo3")]
 #[pyfunction]
-fn run_py() -> PyResult<String> {
-    let result = std::panic::catch_unwind(|| run_cli());
+fn run_py(py: Python<'_>) -> PyResult<String> {
+    let sys = py.import("sys")?;
+    let argv: Vec<String> = sys.getattr("argv")?.extract()?;
+    let result = std::panic::catch_unwind(move || run_cli_from(argv));
 
     match result {
         Ok(Ok(())) => Ok("Success".to_string()),
@@ -1775,7 +1777,15 @@ pub fn cmd_cycle_reorder(config_dir: &Path, accounts: Vec<String>) -> Result<()>
 }
 
 pub fn run_cli() -> Result<()> {
-    let cli = Cli::parse();
+    run_cli_from(std::env::args_os())
+}
+
+pub fn run_cli_from<I, T>(args: I) -> Result<()>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<std::ffi::OsString> + Clone,
+{
+    let cli = Cli::parse_from(args);
     let config_dir = cli.config_dir.unwrap_or_else(get_config_dir_default);
 
     tracing_subscriber::fmt()
