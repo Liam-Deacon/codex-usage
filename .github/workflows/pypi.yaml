@@ -12,6 +12,7 @@ jobs:
     name: Build wheels (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
@@ -28,6 +29,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Patch version from tag
         if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
@@ -42,8 +48,13 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features pyo3
+          args: --release --out dist --features pyo3 -i python3.12
           maturin-version: "latest"
+          before-script-linux: |
+            # Ensure Python headers are available in manylinux container
+            if command -v yum >/dev/null 2>&1; then
+              yum install -y python3-devel || true
+            fi
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
