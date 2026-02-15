@@ -45,7 +45,7 @@ jobs:
         uses: PyO3/maturin-action@v1
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features pyo3 -i python3.12
+          args: --release --out dist --features pyo3 -i 3.12
           maturin-version: "latest"
           before-script-linux: |
             # Ensure Python headers are available in manylinux container
