@@ -36,6 +36,75 @@ fn codex_usage(_py: Python, m: &PyModule) -> PyResult<()> {
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn test_config_dir(suffix: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("codex-usage-{suffix}-{nanos}"))
+    }
+
+    #[test]
+    fn account_auth_path_prefers_sanitized_layout_when_present() {
+        let config_dir = test_config_dir("sanitized-first");
+        let account_name = "liam.m.deacon@gmail.com";
+        let sanitized = get_accounts_dir(&config_dir)
+            .join("liam_m_deacon_gmail_com")
+            .join("auth.json");
+        let legacy = get_accounts_dir(&config_dir)
+            .join(account_name)
+            .join("auth.json");
+
+        fs::create_dir_all(sanitized.parent().unwrap()).unwrap();
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&sanitized, "{}").unwrap();
+        fs::write(&legacy, "{}").unwrap();
+
+        let resolved = get_account_auth_path(&config_dir, account_name);
+        assert_eq!(resolved, sanitized);
+
+        let _ = fs::remove_dir_all(&config_dir);
+    }
+
+    #[test]
+    fn account_auth_path_uses_legacy_layout_when_sanitized_missing() {
+        let config_dir = test_config_dir("legacy-fallback");
+        let account_name = "liam.m.deacon@gmail.com";
+        let legacy = get_accounts_dir(&config_dir)
+            .join(account_name)
+            .join("auth.json");
+
+        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+        fs::write(&legacy, "{}").unwrap();
+
+        let resolved = get_account_auth_path(&config_dir, account_name);
+        assert_eq!(resolved, legacy);
+
+        let _ = fs::remove_dir_all(&config_dir);
+    }
+
+    #[test]
+    fn account_auth_path_defaults_to_sanitized_layout_for_new_accounts() {
+        let config_dir = test_config_dir("default-sanitized");
+        let account_name = "liam.m.deacon@gmail.com";
+        let expected = get_accounts_dir(&config_dir)
+            .join("liam_m_deacon_gmail_com")
+            .join("auth.json");
+
+        let resolved = get_account_auth_path(&config_dir, account_name);
+        assert_eq!(resolved, expected);
+
+        let _ = fs::remove_dir_all(&config_dir);
+    }
+}
+
 fn get_config_dir_default() -> PathBuf {
     dirs::home_dir()
         .map(|p| p.join(".codex-usage"))
@@ -1064,9 +1133,25 @@ pub fn get_accounts_dir(config_dir: &Path) -> PathBuf {
 
 pub fn get_account_auth_path(config_dir: &Path, name: &str) -> PathBuf {
     let sanitized = sanitize_account_name(name);
-    get_accounts_dir(config_dir)
+    let sanitized_path = get_accounts_dir(config_dir)
         .join(&sanitized)
-        .join("auth.json")
+        .join("auth.json");
+    if sanitized_path.exists() {
+        return sanitized_path;
+    }
+    if let Some(legacy_path) = get_legacy_account_auth_path(config_dir, name) {
+        if legacy_path.exists() {
+            return legacy_path;
+        }
+    }
+    sanitized_path
+}
+
+fn get_legacy_account_auth_path(config_dir: &Path, name: &str) -> Option<PathBuf> {
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return None;
+    }
+    Some(get_accounts_dir(config_dir).join(name).join("auth.json"))
 }
 
 fn sanitize_account_name(name: &str) -> String {

@@ -443,7 +443,34 @@ fn get_accounts_dir(config_dir: &Path) -> PathBuf {
 }
 
 fn get_account_auth_path(config_dir: &Path, name: &str) -> PathBuf {
-    get_accounts_dir(config_dir).join(name).join("auth.json")
+    let sanitized = sanitize_account_name(name);
+    let sanitized_path = get_accounts_dir(config_dir)
+        .join(&sanitized)
+        .join("auth.json");
+    if sanitized_path.exists() {
+        return sanitized_path;
+    }
+    if let Some(legacy_path) = get_legacy_account_auth_path(config_dir, name) {
+        if legacy_path.exists() {
+            return legacy_path;
+        }
+    }
+    sanitized_path
+}
+
+fn get_legacy_account_auth_path(config_dir: &Path, name: &str) -> Option<PathBuf> {
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        return None;
+    }
+    Some(get_accounts_dir(config_dir).join(name).join("auth.json"))
+}
+
+fn sanitize_account_name(name: &str) -> String {
+    let sanitized = name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
+    if sanitized.contains("..") || sanitized.starts_with('/') || sanitized.starts_with('\\') {
+        panic!("Invalid account name: {}", name);
+    }
+    sanitized
 }
 
 fn get_config_path(config_dir: &Path) -> PathBuf {
