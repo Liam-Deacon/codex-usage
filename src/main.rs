@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use codex_usage_lib::{get_account_auth_path, get_accounts_dir};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -438,14 +439,6 @@ fn get_codex_auth_path() -> PathBuf {
     get_codex_dir().join("auth.json")
 }
 
-fn get_accounts_dir(config_dir: &Path) -> PathBuf {
-    config_dir.join("accounts")
-}
-
-fn get_account_auth_path(config_dir: &Path, name: &str) -> PathBuf {
-    get_accounts_dir(config_dir).join(name).join("auth.json")
-}
-
 fn get_config_path(config_dir: &Path) -> PathBuf {
     config_dir.join("config.json")
 }
@@ -596,7 +589,7 @@ fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
         );
     }
 
-    let account_auth_path = get_account_auth_path(config_dir, name);
+    let account_auth_path = get_account_auth_path(config_dir, name)?;
     let accounts_dir = get_accounts_dir(config_dir);
     fs::create_dir_all(&accounts_dir).context("Failed to create accounts directory")?;
     copy_auth_file(&codex_auth, &account_auth_path)?;
@@ -624,7 +617,7 @@ fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result<()>
         }
     }
 
-    let account_auth_path = get_account_auth_path(config_dir, name);
+    let account_auth_path = get_account_auth_path(config_dir, name)?;
     if !account_auth_path.exists() {
         anyhow::bail!(
             "Account '{}' not found. Run 'codex-usage accounts list' to see available accounts.",
@@ -651,7 +644,7 @@ fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result<()>
 }
 
 fn cmd_accounts_remove(config_dir: &Path, name: &str) -> Result<()> {
-    let account_auth_path = get_account_auth_path(config_dir, name);
+    let account_auth_path = get_account_auth_path(config_dir, name)?;
     if !account_auth_path.exists() {
         anyhow::bail!("Account '{}' not found.", name);
     }
@@ -985,7 +978,7 @@ fn cmd_status(
     let mut all_usages: Vec<UsageData> = Vec::new();
 
     for account_name in &accounts_to_check {
-        let account_auth_path = get_account_auth_path(config_dir, account_name);
+        let account_auth_path = get_account_auth_path(config_dir, account_name)?;
         let auth = load_codex_auth(&account_auth_path)?;
 
         if let Some(auth) = auth {
@@ -1306,7 +1299,7 @@ fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
     let next_idx = (current_idx + 1) % accounts.len();
     let next_account = &accounts[next_idx];
 
-    let account_auth_path = get_account_auth_path(config_dir, next_account);
+    let account_auth_path = get_account_auth_path(config_dir, next_account)?;
     let auth = load_codex_auth(&account_auth_path)?;
 
     if let Some(auth) = auth {
@@ -1625,7 +1618,7 @@ fn cmd_status_watch(
             }
         } else {
             for account_name in &accounts_to_check {
-                let account_auth_path = get_account_auth_path(config_dir, account_name);
+                let account_auth_path = get_account_auth_path(config_dir, account_name)?;
                 let auth = match load_codex_auth(&account_auth_path) {
                     Ok(a) => a,
                     Err(e) => {
