@@ -104,11 +104,11 @@ jobs:
         with:
           path: artifacts
 
-      - name: Move artifacts
-        run: npx napi artifacts --output-dir artifacts
-
       - name: Prepare npm package contents
         run: npx napi prepublish -t npm
+
+      - name: Move artifacts
+        run: npx napi artifacts --output-dir artifacts
 
       - name: Validate generated platform packages
         run: node scripts/verify-npm-optional-deps.mjs local --package-json package.json --npm-dir npm
