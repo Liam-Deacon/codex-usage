@@ -105,7 +105,7 @@ jobs:
           path: artifacts
 
       - name: Move artifacts
-        run: npx napi artifacts --dir artifacts
+        run: npx napi artifacts --output-dir artifacts
 
       - name: Prepare npm package contents
         run: npx napi prepublish -t npm
