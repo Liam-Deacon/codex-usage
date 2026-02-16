@@ -30,9 +30,25 @@ jobs:
       - name: Run pre-commit
         run: pre-commit run --all-files
 
+  node-tests:
+    name: Node Packaging Tests
+    runs-on: ubuntu-latest
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Run node packaging tests
+        run: node --test test/verify-npm-optional-deps.test.mjs
+
   build:
     name: Build (${{ matrix.os }})
-    needs: [pre-commit]
+    needs: [pre-commit, node-tests]
     if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/')
     runs-on: ${{ matrix.os }}
     strategy:
