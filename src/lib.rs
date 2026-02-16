@@ -40,20 +40,12 @@ fn codex_usage(_py: Python, m: &PyModule) -> PyResult<()> {
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    fn test_config_dir(suffix: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        std::env::temp_dir().join(format!("codex-usage-{suffix}-{nanos}"))
-    }
+    use tempfile::TempDir;
 
     #[test]
     fn account_auth_path_prefers_sanitized_layout_when_present() {
-        let config_dir = test_config_dir("sanitized-first");
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().to_path_buf();
         let account_name = "liam.m.deacon@gmail.com";
         let sanitized = get_accounts_dir(&config_dir)
             .join("liam_m_deacon_gmail_com")
@@ -67,15 +59,14 @@ mod tests {
         fs::write(&sanitized, "{}").unwrap();
         fs::write(&legacy, "{}").unwrap();
 
-        let resolved = get_account_auth_path(&config_dir, account_name);
+        let resolved = get_account_auth_path(&config_dir, account_name).unwrap();
         assert_eq!(resolved, sanitized);
-
-        let _ = fs::remove_dir_all(&config_dir);
     }
 
     #[test]
     fn account_auth_path_uses_legacy_layout_when_sanitized_missing() {
-        let config_dir = test_config_dir("legacy-fallback");
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().to_path_buf();
         let account_name = "liam.m.deacon@gmail.com";
         let legacy = get_accounts_dir(&config_dir)
             .join(account_name)
@@ -84,24 +75,21 @@ mod tests {
         fs::create_dir_all(legacy.parent().unwrap()).unwrap();
         fs::write(&legacy, "{}").unwrap();
 
-        let resolved = get_account_auth_path(&config_dir, account_name);
+        let resolved = get_account_auth_path(&config_dir, account_name).unwrap();
         assert_eq!(resolved, legacy);
-
-        let _ = fs::remove_dir_all(&config_dir);
     }
 
     #[test]
     fn account_auth_path_defaults_to_sanitized_layout_for_new_accounts() {
-        let config_dir = test_config_dir("default-sanitized");
+        let tmp = TempDir::new().unwrap();
+        let config_dir = tmp.path().to_path_buf();
         let account_name = "liam.m.deacon@gmail.com";
         let expected = get_accounts_dir(&config_dir)
             .join("liam_m_deacon_gmail_com")
             .join("auth.json");
 
-        let resolved = get_account_auth_path(&config_dir, account_name);
+        let resolved = get_account_auth_path(&config_dir, account_name).unwrap();
         assert_eq!(resolved, expected);
-
-        let _ = fs::remove_dir_all(&config_dir);
     }
 }
 
@@ -141,6 +129,7 @@ fn get_usage(
 
     let codex_auth_path = if config.accounts.contains_key(&account_name) {
         get_account_auth_path(&config_dir, &account_name)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?
     } else {
         get_codex_auth_path()
     };
@@ -495,6 +484,7 @@ pub fn get_usage_node(
 
     let codex_auth_path = if config.accounts.contains_key(&account_name) {
         get_account_auth_path(&config_dir, &account_name)
+            .map_err(|e| napi::Error::from_reason(e.to_string()))?
     } else {
         get_codex_auth_path()
     };
@@ -1131,35 +1121,39 @@ pub fn get_accounts_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("accounts")
 }
 
-pub fn get_account_auth_path(config_dir: &Path, name: &str) -> PathBuf {
-    let sanitized = sanitize_account_name(name);
+pub fn get_account_auth_path(config_dir: &Path, name: &str) -> Result<PathBuf> {
+    let sanitized = sanitize_account_name(name)?;
     let sanitized_path = get_accounts_dir(config_dir)
         .join(&sanitized)
         .join("auth.json");
     if sanitized_path.exists() {
-        return sanitized_path;
+        return Ok(sanitized_path);
     }
-    if let Some(legacy_path) = get_legacy_account_auth_path(config_dir, name) {
-        if legacy_path.exists() {
-            return legacy_path;
-        }
+    let legacy_path = get_legacy_account_auth_path(config_dir, name)?;
+    if legacy_path.exists() {
+        return Ok(legacy_path);
     }
-    sanitized_path
+    Ok(sanitized_path)
 }
 
-fn get_legacy_account_auth_path(config_dir: &Path, name: &str) -> Option<PathBuf> {
+pub fn get_legacy_account_auth_path(config_dir: &Path, name: &str) -> Result<PathBuf> {
+    validate_account_name(name)?;
+    Ok(get_accounts_dir(config_dir).join(name).join("auth.json"))
+}
+
+pub fn sanitize_account_name(name: &str) -> Result<String> {
+    validate_account_name(name)?;
+    Ok(name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_"))
+}
+
+fn validate_account_name(name: &str) -> Result<()> {
     if name.contains("..") || name.contains('/') || name.contains('\\') {
-        return None;
+        anyhow::bail!(
+            "Invalid account name '{}'. Account names cannot contain '..' or path separators.",
+            name
+        );
     }
-    Some(get_accounts_dir(config_dir).join(name).join("auth.json"))
-}
-
-fn sanitize_account_name(name: &str) -> String {
-    let sanitized = name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_");
-    if sanitized.contains("..") || sanitized.starts_with('/') || sanitized.starts_with('\\') {
-        panic!("Invalid account name: {}", name);
-    }
-    sanitized
+    Ok(())
 }
 
 pub fn get_config_path(config_dir: &Path) -> PathBuf {
@@ -1350,7 +1344,7 @@ pub fn cmd_accounts_add(config_dir: &Path, name: &str) -> Result<()> {
         }
     }
 
-    let account_auth_path = get_account_auth_path(config_dir, name);
+    let account_auth_path = get_account_auth_path(config_dir, name)?;
     let accounts_dir = get_accounts_dir(config_dir);
     fs::create_dir_all(&accounts_dir).context("Failed to create accounts directory")?;
     copy_auth_file(&codex_auth, &account_auth_path)?;
@@ -1378,7 +1372,7 @@ pub fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result
         }
     }
 
-    let account_auth_path = get_account_auth_path(config_dir, name);
+    let account_auth_path = get_account_auth_path(config_dir, name)?;
     if !account_auth_path.exists() {
         anyhow::bail!(
             "Account '{}' not found. Run 'codex-usage accounts list' to see available accounts.",
@@ -1405,7 +1399,7 @@ pub fn cmd_accounts_switch(config_dir: &Path, name: &str, force: bool) -> Result
 }
 
 pub fn cmd_accounts_remove(config_dir: &Path, name: &str) -> Result<()> {
-    let account_auth_path = get_account_auth_path(config_dir, name);
+    let account_auth_path = get_account_auth_path(config_dir, name)?;
     if !account_auth_path.exists() {
         anyhow::bail!("Account '{}' not found.", name);
     }
@@ -1690,7 +1684,7 @@ pub fn cmd_status(
     let client = reqwest::blocking::Client::new();
 
     for account_name in &accounts_to_check {
-        let account_auth_path = get_account_auth_path(config_dir, account_name);
+        let account_auth_path = get_account_auth_path(config_dir, account_name)?;
         let auth = load_codex_auth(&account_auth_path)?;
 
         if let Some(auth) = auth {
@@ -2029,7 +2023,7 @@ pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
     let next_idx = (current_idx + 1) % accounts.len();
     let next_account = &accounts[next_idx];
 
-    let current_account_auth_path = get_account_auth_path(config_dir, current);
+    let current_account_auth_path = get_account_auth_path(config_dir, current)?;
     let current_auth = load_codex_auth(&current_account_auth_path)?;
 
     let client = reqwest::blocking::Client::new();
@@ -2056,7 +2050,7 @@ pub fn cmd_cycle_now(config_dir: &Path, force: bool) -> Result<()> {
                         let backup_path = codex_auth.with_extension("json.backup");
                         fs::copy(&codex_auth, &backup_path).ok();
                     }
-                    let next_account_auth_path = get_account_auth_path(config_dir, next_account);
+                    let next_account_auth_path = get_account_auth_path(config_dir, next_account)?;
                     copy_auth_file(&next_account_auth_path, &codex_auth)?;
 
                     let mut updated_config = load_config(config_dir)?;
