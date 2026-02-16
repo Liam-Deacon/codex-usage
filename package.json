@@ -5,6 +5,7 @@
   "main": "index.js",
   "types": "index.d.ts",
   "bin": {
+    "codex-usage-cli": "cli.mjs",
     "codex-usage": "cli.mjs"
   },
   "napi": {
@@ -32,7 +33,8 @@
   "scripts": {
     "build": "napi build --features napi --platform --release",
     "prepublishOnly": "napi prepublish -t npm",
-    "artifacts": "napi artifacts"
+    "artifacts": "napi artifacts",
+    "test:node": "node --test test/*.test.mjs"
   },
   "optionalDependencies": {
     "codex-usage-cli-darwin-x64": "0.1.9",
