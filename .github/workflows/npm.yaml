@@ -130,11 +130,19 @@ jobs:
         run: find npm -maxdepth 2 -type f | sort
 
       - name: Publish platform packages to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           set -euo pipefail
-          rm -f "${HOME}/.npmrc"
-          unset NODE_AUTH_TOKEN
-          echo "Using trusted publishing (OIDC)."
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            export NODE_AUTH_TOKEN="${NPM_TOKEN}"
+            printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "${HOME}/.npmrc"
+            echo "Using npm token auth."
+          else
+            unset NODE_AUTH_TOKEN
+            rm -f "${HOME}/.npmrc"
+            echo "Using trusted publishing (OIDC)."
+          fi
           mapfile -t package_dirs < <(find npm -mindepth 1 -maxdepth 1 -type d | sort)
           if [ "${#package_dirs[@]}" -eq 0 ]; then
             echo "No generated platform package directories found under npm/"
@@ -146,9 +154,16 @@ jobs:
           done
 
       - name: Publish root package to npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          rm -f "${HOME}/.npmrc"
-          unset NODE_AUTH_TOKEN
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            export NODE_AUTH_TOKEN="${NPM_TOKEN}"
+            printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "${HOME}/.npmrc"
+          else
+            unset NODE_AUTH_TOKEN
+            rm -f "${HOME}/.npmrc"
+          fi
           npm publish --provenance --access public
 
       - name: Set up Bun
