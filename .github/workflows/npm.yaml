@@ -130,8 +130,21 @@ jobs:
       - name: List npm package contents
         run: find npm -maxdepth 2 -type f | sort
 
-      - name: Publish platform packages to npm (token auth)
-        if: ${{ secrets.NPM_TOKEN != '' }}
+      - name: Configure npm publish auth
+        shell: bash
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -n "${NPM_TOKEN:-}" ]; then
+            printf '//registry.npmjs.org/:_authToken=%s\n' "${NPM_TOKEN}" > "${HOME}/.npmrc"
+            echo "Configured npm token auth."
+          else
+            rm -f "${HOME}/.npmrc"
+            echo "No NPM_TOKEN provided; using trusted publishing (OIDC)."
+          fi
+
+      - name: Publish platform packages to npm
         run: |
           set -euo pipefail
           mapfile -t package_dirs < <(find npm -mindepth 1 -maxdepth 1 -type d | sort)
@@ -143,31 +156,8 @@ jobs:
             echo "Publishing $package_dir"
             npm publish "./$package_dir" --provenance --access public
           done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish platform packages to npm (trusted publishing)
-        if: ${{ secrets.NPM_TOKEN == '' }}
-        run: |
-          set -euo pipefail
-          mapfile -t package_dirs < <(find npm -mindepth 1 -maxdepth 1 -type d | sort)
-          if [ "${#package_dirs[@]}" -eq 0 ]; then
-            echo "No generated platform package directories found under npm/"
-            exit 1
-          fi
-          for package_dir in "${package_dirs[@]}"; do
-            echo "Publishing $package_dir"
-            npm publish "./$package_dir" --provenance --access public
-          done
-
-      - name: Publish root package to npm (token auth)
-        if: ${{ secrets.NPM_TOKEN != '' }}
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish root package to npm (trusted publishing)
-        if: ${{ secrets.NPM_TOKEN == '' }}
+      - name: Publish root package to npm
         run: npm publish --provenance --access public
 
       - name: Set up Bun
