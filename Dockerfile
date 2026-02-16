@@ -7,7 +7,7 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 
-RUN cargo build --release
+RUN cargo build --release --bin codex-usage
 
 FROM alpine:3.19
 

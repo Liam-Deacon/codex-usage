@@ -62,7 +62,7 @@ jobs:
         run: cargo clippy --all --all-targets -- -D warnings -A dead_code -A unused_variables
 
       - name: Build
-        run: cargo build --release --verbose
+        run: cargo build --release --verbose --bin codex-usage
 
       - name: Run tests
         run: cargo test --all
@@ -129,11 +129,11 @@ jobs:
 
       - name: Build release (cross)
         if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }}
+        run: cross build --release --target ${{ matrix.target }} --bin codex-usage
 
       - name: Build release (native)
         if: "!matrix.cross"
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --bin codex-usage
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
