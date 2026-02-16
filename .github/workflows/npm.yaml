@@ -93,7 +93,18 @@ jobs:
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" package.json
+          VERSION="$VERSION" node -e '
+          const fs = require("fs");
+          const version = process.env.VERSION;
+          const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          packageJson.version = version;
+          if (packageJson.optionalDependencies) {
+            for (const dep of Object.keys(packageJson.optionalDependencies)) {
+              packageJson.optionalDependencies[dep] = version;
+            }
+          }
+          fs.writeFileSync("package.json", `${JSON.stringify(packageJson, null, 2)}\n`);
+          '
           grep '"version"' package.json
 
       - name: Install dependencies
@@ -104,8 +115,8 @@ jobs:
         with:
           path: artifacts
 
-      - name: Prepare npm package contents
-        run: npx napi prepublish -t npm
+      - name: Create platform package directories
+        run: npx napi create-npm-dirs --npm-dir npm
 
       - name: Move artifacts
         run: npx napi artifacts --output-dir artifacts
