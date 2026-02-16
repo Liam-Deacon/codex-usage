@@ -1907,65 +1907,6 @@ fn cmd_wakeup_run(config_dir: &Path, account: Option<&str>, force: bool) -> Resu
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-    use tempfile::TempDir;
-
-    #[test]
-    fn account_auth_path_prefers_sanitized_layout_when_present() {
-        let tmp = TempDir::new().expect("tmp dir");
-        let config_dir = tmp.path().to_path_buf();
-        let account_name = "liam.m.deacon@gmail.com";
-        let sanitized = get_accounts_dir(&config_dir)
-            .join("liam_m_deacon_gmail_com")
-            .join("auth.json");
-        let legacy = get_accounts_dir(&config_dir)
-            .join(account_name)
-            .join("auth.json");
-
-        fs::create_dir_all(sanitized.parent().expect("sanitized parent")).expect("mkdir sanitized");
-        fs::create_dir_all(legacy.parent().expect("legacy parent")).expect("mkdir legacy");
-        fs::write(&sanitized, "{}").expect("write sanitized");
-        fs::write(&legacy, "{}").expect("write legacy");
-
-        let resolved =
-            get_account_auth_path(&config_dir, account_name).expect("resolve account path");
-        assert_eq!(resolved, sanitized);
-    }
-
-    #[test]
-    fn account_auth_path_falls_back_to_legacy_layout() {
-        let tmp = TempDir::new().expect("tmp dir");
-        let config_dir = tmp.path().to_path_buf();
-        let account_name = "liam.m.deacon@gmail.com";
-        let legacy = get_accounts_dir(&config_dir)
-            .join(account_name)
-            .join("auth.json");
-
-        fs::create_dir_all(legacy.parent().expect("legacy parent")).expect("mkdir legacy");
-        fs::write(&legacy, "{}").expect("write legacy");
-
-        let resolved =
-            get_account_auth_path(&config_dir, account_name).expect("resolve account path");
-        assert_eq!(resolved, legacy);
-    }
-
-    #[test]
-    fn account_auth_path_rejects_path_traversal_names() {
-        let tmp = TempDir::new().expect("tmp dir");
-        let config_dir = tmp.path().to_path_buf();
-
-        let err =
-            get_account_auth_path(&config_dir, "../escape").expect_err("should reject traversal");
-        assert!(
-            err.to_string().contains("Invalid account name"),
-            "unexpected error: {err}"
-        );
-    }
-}
-
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_dir = cli.config_dir.unwrap_or_else(get_config_dir);
@@ -2261,4 +2202,63 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn account_auth_path_prefers_sanitized_layout_when_present() {
+        let tmp = TempDir::new().expect("tmp dir");
+        let config_dir = tmp.path().to_path_buf();
+        let account_name = "liam.m.deacon@gmail.com";
+        let sanitized = get_accounts_dir(&config_dir)
+            .join("liam_m_deacon_gmail_com")
+            .join("auth.json");
+        let legacy = get_accounts_dir(&config_dir)
+            .join(account_name)
+            .join("auth.json");
+
+        fs::create_dir_all(sanitized.parent().expect("sanitized parent")).expect("mkdir sanitized");
+        fs::create_dir_all(legacy.parent().expect("legacy parent")).expect("mkdir legacy");
+        fs::write(&sanitized, "{}").expect("write sanitized");
+        fs::write(&legacy, "{}").expect("write legacy");
+
+        let resolved =
+            get_account_auth_path(&config_dir, account_name).expect("resolve account path");
+        assert_eq!(resolved, sanitized);
+    }
+
+    #[test]
+    fn account_auth_path_falls_back_to_legacy_layout() {
+        let tmp = TempDir::new().expect("tmp dir");
+        let config_dir = tmp.path().to_path_buf();
+        let account_name = "liam.m.deacon@gmail.com";
+        let legacy = get_accounts_dir(&config_dir)
+            .join(account_name)
+            .join("auth.json");
+
+        fs::create_dir_all(legacy.parent().expect("legacy parent")).expect("mkdir legacy");
+        fs::write(&legacy, "{}").expect("write legacy");
+
+        let resolved =
+            get_account_auth_path(&config_dir, account_name).expect("resolve account path");
+        assert_eq!(resolved, legacy);
+    }
+
+    #[test]
+    fn account_auth_path_rejects_path_traversal_names() {
+        let tmp = TempDir::new().expect("tmp dir");
+        let config_dir = tmp.path().to_path_buf();
+
+        let err =
+            get_account_auth_path(&config_dir, "../escape").expect_err("should reject traversal");
+        assert!(
+            err.to_string().contains("Invalid account name"),
+            "unexpected error: {err}"
+        );
+    }
 }
