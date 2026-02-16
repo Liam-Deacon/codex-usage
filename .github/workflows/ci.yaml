@@ -208,3 +208,8 @@ jobs:
         run: gh workflow run pypi.yaml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trigger npm publish
+        run: gh workflow run npm.yaml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

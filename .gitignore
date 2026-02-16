@@ -26,5 +26,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Node.js
+node_modules/
+*.node
+package-lock.json
+
 # Worktrees
 .worktree/
