@@ -46,6 +46,14 @@ jobs:
       - name: Run node packaging tests
         run: node --test test/verify-npm-optional-deps.test.mjs
 
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Verify CLI binary builds with napi feature
+        run: cargo build --locked --features napi --bin codex-usage
+
   build:
     name: Build (${{ matrix.os }})
     needs: [pre-commit, node-tests]

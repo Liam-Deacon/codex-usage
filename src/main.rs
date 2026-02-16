@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use codex_usage_lib::{get_account_auth_path, get_accounts_dir};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::fs;
@@ -437,6 +436,47 @@ fn get_codex_dir() -> PathBuf {
 
 fn get_codex_auth_path() -> PathBuf {
     get_codex_dir().join("auth.json")
+}
+
+fn get_accounts_dir(config_dir: &Path) -> PathBuf {
+    config_dir.join("accounts")
+}
+
+fn get_account_auth_path(config_dir: &Path, name: &str) -> Result<PathBuf> {
+    let sanitized = sanitize_account_name(name)?;
+    let sanitized_path = get_accounts_dir(config_dir)
+        .join(&sanitized)
+        .join("auth.json");
+    if sanitized_path.exists() {
+        return Ok(sanitized_path);
+    }
+
+    let legacy_path = get_legacy_account_auth_path(config_dir, name)?;
+    if legacy_path.exists() {
+        return Ok(legacy_path);
+    }
+
+    Ok(sanitized_path)
+}
+
+fn get_legacy_account_auth_path(config_dir: &Path, name: &str) -> Result<PathBuf> {
+    validate_account_name(name)?;
+    Ok(get_accounts_dir(config_dir).join(name).join("auth.json"))
+}
+
+fn sanitize_account_name(name: &str) -> Result<String> {
+    validate_account_name(name)?;
+    Ok(name.replace(|c: char| !c.is_alphanumeric() && c != '-' && c != '_', "_"))
+}
+
+fn validate_account_name(name: &str) -> Result<()> {
+    if name.contains("..") || name.contains('/') || name.contains('\\') {
+        anyhow::bail!(
+            "Invalid account name '{}'. Account names cannot contain '..' or path separators.",
+            name
+        );
+    }
+    Ok(())
 }
 
 fn get_config_path(config_dir: &Path) -> PathBuf {
@@ -2162,4 +2202,63 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn account_auth_path_prefers_sanitized_layout_when_present() {
+        let tmp = TempDir::new().expect("tmp dir");
+        let config_dir = tmp.path().to_path_buf();
+        let account_name = "liam.m.deacon@gmail.com";
+        let sanitized = get_accounts_dir(&config_dir)
+            .join("liam_m_deacon_gmail_com")
+            .join("auth.json");
+        let legacy = get_accounts_dir(&config_dir)
+            .join(account_name)
+            .join("auth.json");
+
+        fs::create_dir_all(sanitized.parent().expect("sanitized parent")).expect("mkdir sanitized");
+        fs::create_dir_all(legacy.parent().expect("legacy parent")).expect("mkdir legacy");
+        fs::write(&sanitized, "{}").expect("write sanitized");
+        fs::write(&legacy, "{}").expect("write legacy");
+
+        let resolved =
+            get_account_auth_path(&config_dir, account_name).expect("resolve account path");
+        assert_eq!(resolved, sanitized);
+    }
+
+    #[test]
+    fn account_auth_path_falls_back_to_legacy_layout() {
+        let tmp = TempDir::new().expect("tmp dir");
+        let config_dir = tmp.path().to_path_buf();
+        let account_name = "liam.m.deacon@gmail.com";
+        let legacy = get_accounts_dir(&config_dir)
+            .join(account_name)
+            .join("auth.json");
+
+        fs::create_dir_all(legacy.parent().expect("legacy parent")).expect("mkdir legacy");
+        fs::write(&legacy, "{}").expect("write legacy");
+
+        let resolved =
+            get_account_auth_path(&config_dir, account_name).expect("resolve account path");
+        assert_eq!(resolved, legacy);
+    }
+
+    #[test]
+    fn account_auth_path_rejects_path_traversal_names() {
+        let tmp = TempDir::new().expect("tmp dir");
+        let config_dir = tmp.path().to_path_buf();
+
+        let err =
+            get_account_auth_path(&config_dir, "../escape").expect_err("should reject traversal");
+        assert!(
+            err.to_string().contains("Invalid account name"),
+            "unexpected error: {err}"
+        );
+    }
 }
