@@ -14,12 +14,12 @@ def get_usage(
     refresh: bool = False,
 ) -> Dict[str, Any]:
     """Get usage data for an account.
-    
+
     Args:
         account: Account name (optional, uses active account if not specified)
         config_dir: Config directory path (optional)
         refresh: Force refresh, bypassing cache (default: False)
-    
+
     Returns:
         Dictionary with usage data including:
         - account_name: str
@@ -30,7 +30,7 @@ def get_usage(
         - code_review: Optional[Dict] with used_percent
         - limit_reached: bool
         - auth_type: str
-    
+
     Raises:
         RuntimeError: If fetching usage fails
     """
@@ -41,10 +41,10 @@ def get_usage(
 
 def list_accounts(config_dir: Optional[str] = None) -> List[Dict[str, Any]]:
     """List all configured accounts.
-    
+
     Args:
         config_dir: Config directory path (optional)
-    
+
     Returns:
         List of account dictionaries with:
         - name: str
@@ -63,15 +63,15 @@ def switch_account(
     force: bool = False,
 ) -> str:
     """Switch to a different account.
-    
+
     Args:
         name: Account name to switch to
         config_dir: Config directory path (optional)
         force: Force switch even if Codex is running (default: False)
-    
+
     Returns:
         Success message
-    
+
     Raises:
         RuntimeError: If switching fails
     """
@@ -81,14 +81,14 @@ def switch_account(
 
 def add_account(name: str, config_dir: Optional[str] = None) -> str:
     """Add current Codex auth as a new account.
-    
+
     Args:
         name: Name for the new account
         config_dir: Config directory path (optional)
-    
+
     Returns:
         Success message
-    
+
     Raises:
         RuntimeError: If adding fails (e.g., no Codex auth found)
     """
@@ -98,14 +98,14 @@ def add_account(name: str, config_dir: Optional[str] = None) -> str:
 
 def remove_account(name: str, config_dir: Optional[str] = None) -> str:
     """Remove an account.
-    
+
     Args:
         name: Account name to remove
         config_dir: Config directory path (optional)
-    
+
     Returns:
         Success message
-    
+
     Raises:
         RuntimeError: If removal fails
     """
@@ -115,10 +115,10 @@ def remove_account(name: str, config_dir: Optional[str] = None) -> str:
 
 def get_cycle_config(config_dir: Optional[str] = None) -> Dict[str, Any]:
     """Get cycling configuration.
-    
+
     Args:
         config_dir: Config directory path (optional)
-    
+
     Returns:
         Dictionary with:
         - enabled: bool
@@ -141,16 +141,16 @@ def set_cycle_config(
     mode: Optional[str] = None,
 ) -> str:
     """Configure cycling thresholds.
-    
+
     Args:
         config_dir: Config directory path (optional)
         five_hour: 5-hour threshold (remaining % that triggers switch)
         weekly: Weekly threshold (remaining % that triggers switch)
         mode: "and" (both thresholds) or "or" (either threshold)
-    
+
     Returns:
         Success message
-    
+
     Raises:
         RuntimeError: If configuration fails
     """
@@ -160,10 +160,10 @@ def set_cycle_config(
 
 def cycle_enable(config_dir: Optional[str] = None) -> str:
     """Enable automatic cycling.
-    
+
     Args:
         config_dir: Config directory path (optional)
-    
+
     Returns:
         Success message
     """
@@ -173,10 +173,10 @@ def cycle_enable(config_dir: Optional[str] = None) -> str:
 
 def cycle_disable(config_dir: Optional[str] = None) -> str:
     """Disable automatic cycling.
-    
+
     Args:
         config_dir: Config directory path (optional)
-    
+
     Returns:
         Success message
     """
@@ -189,14 +189,14 @@ def cycle_now(
     config_dir: Optional[str] = None,
 ) -> str:
     """Manually trigger cycle check.
-    
+
     Args:
         force: Force cycle even if Codex is running (default: False)
         config_dir: Config directory path (optional)
-    
+
     Returns:
         Success message
-    
+
     Raises:
         RuntimeError: If cycling fails
     """
@@ -206,10 +206,10 @@ def cycle_now(
 
 def get_cycle_status(config_dir: Optional[str] = None) -> Dict[str, Any]:
     """Get detailed cycle status.
-    
+
     Args:
         config_dir: Config directory path (optional)
-    
+
     Returns:
         Dictionary with:
         - enabled: bool
@@ -226,7 +226,7 @@ def get_cycle_status(config_dir: Optional[str] = None) -> Dict[str, Any]:
 
 def get_config_dir() -> str:
     """Get the default config directory path.
-    
+
     Returns:
         Path to config directory as string
     """
@@ -236,10 +236,10 @@ def get_config_dir() -> str:
 
 def run() -> str:
     """Run the CLI (equivalent to running `codex-usage` command).
-    
+
     Returns:
         "Success" if CLI runs successfully
-    
+
     Raises:
         RuntimeError: If CLI fails
     """

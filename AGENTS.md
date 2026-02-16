@@ -30,10 +30,14 @@ This triggers the following chain:
    - Builds wheels for all platforms + sdist
    - Publishes to TestPyPI, then PyPI (using trusted publishing)
 
-> **Note**: Docker and PyPI workflows are triggered via `workflow_call` from ci.yaml
+4. **npm.yaml** (called by ci.yaml after publish):
+   - Builds `.node` native modules for 4 platform targets
+   - Publishes to npm with provenance
+
+> **Note**: Docker, PyPI, and npm workflows are triggered via `workflow_dispatch` from ci.yaml
 > rather than `release: published` events, because `GITHUB_TOKEN`-created events
-> don't trigger other workflows (GitHub Actions limitation). Both workflows also
-> support `workflow_dispatch` for manual runs.
+> don't trigger other workflows (GitHub Actions limitation). All downstream workflows
+> also support `workflow_dispatch` for manual runs.
 
 ## Platform Matrix
 
@@ -56,6 +60,22 @@ This triggers the following chain:
 - Package name: `codex-usage`
 - Built with maturin (Rust + PyO3 bindings)
 - Wheel targets: `x86_64-manylinux`, `aarch64-manylinux`, `x86_64-apple-darwin`, `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`
+
+## npm Package
+
+- Package name: `codex-usage-cli`
+- Built with napi-rs (Rust + Node.js native bindings)
+- CLI entry point: `cli.mjs` (available via `npx codex-usage-cli` or `bunx codex-usage-cli`)
+- Workflow: `npm.yaml` (triggered via `workflow_dispatch` from `ci.yaml`)
+- Platform targets:
+  | Target | Runner |
+  |--------|--------|
+  | `x86_64-apple-darwin` | `macos-latest` |
+  | `aarch64-apple-darwin` | `macos-latest` |
+  | `x86_64-unknown-linux-gnu` | `ubuntu-latest` |
+  | `x86_64-pc-windows-msvc` | `windows-latest` |
+- OIDC: npm publish uses `--provenance` with `id-token: write` permission
+- First publish done (v0.1.9). Configure trusted publishing on npmjs.com (Settings > Provenance > GitHub Actions, repository: `Liam-Deacon/codex-usage`, workflow: `npm.yaml`) to enable `--provenance` in CI.
 
 ## Important Notes
 

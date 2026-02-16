@@ -6,7 +6,7 @@ description = "CLI tool to track OpenAI Codex usage with multi-account support"
 authors = ["Liam Deacon <liam@deacon.dev>"]
 license = "MIT"
 repository = "https://github.com/Liam-Deacon/codex-usage"
-rust-version = "1.70"
+rust-version = "1.77"
 
 [lib]
 name = "codex_usage_lib"
@@ -37,6 +37,11 @@ ctrlc = "3.2"
 rusqlite = { version = "0.32", features = ["bundled"] }
 ratatui = "0.28"
 pyo3 = { version = "0.20", optional = true }
+napi = { version = "3", optional = true, default-features = false, features = ["napi9"] }
+napi-derive = { version = "3", optional = true }
+
+[build-dependencies]
+napi-build = { version = "2", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5"
@@ -57,6 +62,7 @@ predicates = "3.1"
 [features]
 default = []
 pyo3 = ["dep:pyo3", "pyo3/extension-module", "pyo3/abi3-py38"]
+napi = ["dep:napi", "dep:napi-derive", "dep:napi-build"]
 
 [profile.release]
 opt-level = 3

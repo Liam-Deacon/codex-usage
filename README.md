@@ -36,6 +36,13 @@ scoop bucket add Liam-Deacon https://github.com/Liam-Deacon/scoop-bucket
 scoop install codex-usage
 ```
 
+### Node.js (npx / bunx)
+
+```bash
+npx codex-usage-cli --help
+bunx codex-usage-cli --help
+```
+
 ### Python (uvx)
 
 ```bash

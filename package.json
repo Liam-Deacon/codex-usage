@@ -1,0 +1,43 @@
+{
+  "name": "codex-usage-cli",
+  "version": "0.1.9",
+  "description": "CLI tool to track OpenAI Codex usage with multi-account support",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "bin": {
+    "codex-usage": "cli.mjs"
+  },
+  "napi": {
+    "binaryName": "codex-usage-cli",
+    "targets": [
+      "x86_64-apple-darwin",
+      "aarch64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "cli.mjs"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Liam-Deacon/codex-usage.git"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@napi-rs/cli": "^3.0.0"
+  },
+  "scripts": {
+    "build": "napi build --features napi --platform --release",
+    "prepublishOnly": "napi prepublish -t npm",
+    "artifacts": "napi artifacts"
+  },
+  "optionalDependencies": {
+    "codex-usage-cli-darwin-x64": "0.1.9",
+    "codex-usage-cli-darwin-arm64": "0.1.9",
+    "codex-usage-cli-linux-x64-gnu": "0.1.9",
+    "codex-usage-cli-win32-x64-msvc": "0.1.9"
+  }
+}
